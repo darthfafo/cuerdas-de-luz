@@ -7,11 +7,14 @@
  * Todo corre en el navegador: ningún cuadro de la cámara sale del dispositivo.
  */
 
+import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "./lib/camera.js";
+import { loadVision } from "./lib/vision.js";
+import {
+  clamp, clamp01, dist, midpoint, palmCenter, isThumbsUp, isGunShape, isThumbCocked, isGripShape, indexBend, handPose3D,
+} from "./lib/gestures.js";
+import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun } from "./lib/gun3d.js";
+
 // ───────────────────────── Configuración ─────────────────────────
-const MP_VERSION = "0.10.14";
-const MP_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
-const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
 const SITE_URL = "https://darthfafo.github.io/cuerdas-de-luz/";
 const SITE_LABEL = "darthfafo.github.io/cuerdas-de-luz";
 
@@ -28,8 +31,7 @@ const MASTER_GAIN = 0.6;
 const RING_LEN = 2 * Math.PI * 62;
 const FONT = 'ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif';
 
-// Celulares y tablets (puntero táctil): menos carga, y gestos pensados para cuando una mano sostiene el teléfono.
-const IS_TOUCH = matchMedia("(pointer: coarse)").matches;
+// Celulares y tablets (IS_TOUCH): menos carga, y gestos pensados para cuando una mano sostiene el teléfono.
 const NUM_HANDS = IS_TOUCH ? 2 : 4;      // en el celu casi nunca hay otra persona tan cerca
 const FACE_EVERY = IS_TOUCH ? 6 : 3;     // cada cuántos cuadros se busca la cara (si no hay barra en los ojos)
 const MIN_SOLO_PX = 90;                  // largo mínimo de una cuerda hecha con una sola mano
@@ -44,12 +46,7 @@ const SCALE_NAMES = Object.keys(SCALES);
 const HAND_BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 
 // Solo en localhost: ?video=ruta/al/clip.mp4 usa un video en vez de la cámara (para probar sin webcam).
-const TEST_VIDEO = (() => {
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return null;
-  const v = new URLSearchParams(location.search).get("video");
-  if (!v) return null;
-  try { const u = new URL(v, location.href); return u.origin === location.origin ? u.href : null; } catch { return null; }
-})();
+const TEST_VIDEO = testVideoUrl();
 
 // ───────────────────────── DOM ─────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -75,11 +72,6 @@ const sparks = [];
 let hueSeed = Math.random() * 360;
 let bridge = null;          // cuerda que se está estirando con las manos
 const pointers = new Map(); // dedos / mouse apretados: pointerId → trazo en curso
-
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const clamp01 = (v) => clamp(v, 0, 1);
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
 // ───────────────────────── Lienzo ─────────────────────────
 let W = 0, H = 0, DPR = 1, bgGradient = null;
@@ -296,39 +288,14 @@ function spawnSparks(p, hue, n) {
 
 // ───────────────────────── Cámara ─────────────────────────
 let cameraStream = null;
-const namedError = (name) => Object.assign(new Error(name), { name });
 
 async function startCamera() {
-  if (TEST_VIDEO) {
-    video.srcObject = null; video.src = TEST_VIDEO; video.loop = true; video.muted = true;
-    await video.play();
-    return;
-  }
-  if (!window.isSecureContext) throw namedError("InsecureContextError");
-  if (!navigator.mediaDevices?.getUserMedia) throw namedError("UnsupportedError");
   stopCamera();
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      // en el celu, la resolución por defecto de la cámara frontal alcanza y gira bien con el teléfono
-      video: IS_TOUCH
-        ? { facingMode: "user", frameRate: { ideal: 30, max: 30 } }
-        : { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-    });
-  } catch (e) {
-    if (e.name !== "OverconstrainedError") throw e;
-    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
-  }
-  cameraStream = stream;
-  stream.getVideoTracks()[0]?.addEventListener("ended", onCameraLost);
-  video.srcObject = stream;
-  await video.play();
+  cameraStream = await openCamera(video, { testVideo: TEST_VIDEO, onEnded: onCameraLost });
 }
 function stopCamera() {
-  if (cameraStream) { for (const t of cameraStream.getTracks()) t.stop(); cameraStream = null; }
-  video.srcObject = null;
-  if (video.getAttribute("src")) { video.pause(); video.removeAttribute("src"); video.load(); }
+  closeCamera(video, cameraStream);
+  cameraStream = null;
 }
 function onCameraLost() {
   const msg = "Se desconectó la cámara.";
@@ -338,57 +305,29 @@ function onCameraLost() {
     action: { label: "Reintentar", fn: () => startCamera().catch((e) => toast(cameraErrorMessage(e), { ms: 7000 })) },
   });
 }
-function cameraErrorMessage(e) {
-  switch (e?.name) {
-    case "InsecureContextError": return "La cámara solo funciona con https:// o en localhost.";
-    case "UnsupportedError": return "Este navegador no permite usar la cámara. Probá con Chrome, Edge, Safari o Firefox actualizados.";
-    case "NotAllowedError": case "SecurityError": case "PermissionDeniedError":
-      return "No hay permiso para usar la cámara. Habilitalo desde el candado de la barra de direcciones y tocá Reintentar.";
-    case "NotFoundError": case "DevicesNotFoundError": case "OverconstrainedError":
-      return "No encontré ninguna cámara conectada.";
-    case "NotReadableError": case "TrackStartError": case "AbortError":
-      return "La cámara está ocupada por otra app (Zoom, Meet…). Cerrala y tocá Reintentar.";
-    default: return "No se pudo abrir la cámara. Tocá Reintentar.";
-  }
-}
 const hasVideo = () => useCamera && video.readyState >= 2 && video.videoWidth > 0;
 
 // Mapeo video → pantalla: espejado y recortado para cubrir toda la ventana.
 let ox = 0, oy = 0, dw = 0, dh = 0;
 function computeMap() {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw) return;
-  const sc = Math.max(W / vw, H / vh);
-  dw = vw * sc; dh = vh * sc; ox = (W - dw) / 2; oy = (H - dh) / 2;
+  const m = coverMap(video, W, H);
+  if (m) ({ ox, oy, dw, dh } = m);
 }
 const toScreen = (p) => ({ x: W - (ox + p.x * dw), y: oy + p.y * dh });
 
 // ───────────────────────── Modelos (MediaPipe) ─────────────────────────
-let landmarker = null, faceDetector = null, faceFailed = false, modelsPromise = null, modelAttempts = 0;
+let landmarker = null, faceDetector = null, faceFailed = false, modelsPromise = null;
 
 function loadModels() {
-  modelsPromise ||= (async () => {
-    // si el CDN falló, el navegador recuerda el error: en el reintento cambiamos la URL
-    const bust = modelAttempts++ ? `?retry=${modelAttempts}` : "";
-    const { FilesetResolver, HandLandmarker, FaceDetector } = await import(`${MP_BASE}/vision_bundle.mjs${bust}`);
-    const fileset = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
-    const create = async (Task, options) => {
-      const withDelegate = (delegate) => ({ ...options, baseOptions: { ...options.baseOptions, delegate } });
-      try { return await Task.createFromOptions(fileset, withDelegate("GPU")); }
-      catch (err) { console.warn("GPU no disponible, sigo con CPU.", err); return Task.createFromOptions(fileset, withDelegate("CPU")); }
-    };
-    landmarker = await create(HandLandmarker, {
-      baseOptions: { modelAssetPath: HAND_MODEL }, runningMode: "VIDEO", numHands: NUM_HANDS,
-      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
-    });
+  modelsPromise ||= loadVision({ numHands: NUM_HANDS, face: true }).then(({ hands: h, face }) => {
+    landmarker = h;
     // la cara es opcional (persona principal + barra en los ojos): si falla, la app sigue
-    create(FaceDetector, { baseOptions: { modelAssetPath: FACE_MODEL }, runningMode: "VIDEO", minDetectionConfidence: 0.5 })
-      .then((fd) => { faceDetector = fd; }, (err) => {
-        faceFailed = true;
-        console.warn("No se pudo cargar el detector de caras.", err);
-        if (hideEyes) { toast("No se pudo cargar el detector de caras."); setEyes(false); }
-      });
-  })().catch((err) => { modelsPromise = null; throw err; });
+    face.then((fd) => { faceDetector = fd; }, (err) => {
+      faceFailed = true;
+      console.warn("No se pudo cargar el detector de caras.", err);
+      if (hideEyes) { toast("No se pudo cargar el detector de caras."); setEyes(false); }
+    });
+  }).catch((err) => { modelsPromise = null; throw err; });
   return modelsPromise;
 }
 
@@ -502,16 +441,7 @@ function processHands(list, now) {
 }
 function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; st.soloBlocked = false; }
 
-// Pulgar arriba: pulgar estirado hacia arriba, más alto que el resto, y los otros dedos cerrados.
-function isThumbsUp(p) {
-  const size = dist(p[0], p[9]);
-  const tv = { x: p[4].x - p[2].x, y: p[4].y - p[2].y };
-  const tl = Math.hypot(tv.x, tv.y);
-  if (tl < size * 0.45 || tv.y > -0.7 * tl) return false;
-  for (const i of [8, 12, 16, 20]) if (p[i].y < p[4].y + size * 0.15) return false;
-  for (const [tip, pip] of [[8, 6], [12, 10], [16, 14], [20, 18]]) if (dist(p[tip], p[0]) > dist(p[pip], p[0]) * 1.1) return false;
-  return true;
-}
+// Pulgar arriba (isThumbsUp, en lib/gestures.js), sostenido un instante, arranca la app.
 let thumbHold = 0, lastGateT = 0;
 function checkGate(list, now) {
   const dt = lastGateT ? Math.min(100, now - lastGateT) : 16;
@@ -534,54 +464,12 @@ function checkGate(list, now) {
 // Hacé una "pistolita" con la mano (índice estirado, pulgar para arriba, el resto cerrado)
 // y sostenela quieta 2 segundos: aparece una pistola de agua (o una de fantasía).
 // Para disparar, cerrá el índice como si apretaras el gatillo de una pistola de verdad.
+// Los gestos (isGunShape, isThumbCocked, isGripShape, indexBend) están en lib/gestures.js
+// y el modelo 3D en lib/gun3d.js: los comparte el juego "Tiro al vuelo".
 const GUN_HOLD_MS = 2000;
 const MAX_DROPS = 400;
-const GUN_STYLES = [
-  { name: "agua", body: ["#8ff6ff", "#1aa7ff"], grip: ["#ffb347", "#ff7a1a"], accent: "#ffd93b", nozzle: "#ff7a1a", rainbow: false },
-  { name: "fantasía", body: ["#f3b4ff", "#8a4dff"], grip: ["#ff9ad9", "#e0409a"], accent: "#ffe27a", nozzle: "#ffe27a", rainbow: true },
-];
 const drops = [];
 let gunFound = false;
-
-const angleBetween = (a, b) =>
-  Math.acos(clamp((a.x * b.x + a.y * b.y) / ((Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y)) || 1), -1, 1));
-const easeOutBack = (t) => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
-
-// Índice estirado y derecho; mayor, anular y meñique cerrados. El pulgar puede estar arriba o abajo (gatillo).
-function isGunShape(p) {
-  if (dist(p[8], p[0]) < dist(p[6], p[0]) * 1.15) return false;
-  const a = { x: p[6].x - p[5].x, y: p[6].y - p[5].y }, b = { x: p[8].x - p[6].x, y: p[8].y - p[6].y };
-  if (angleBetween(a, b) > 0.6) return false;
-  for (const [tip, pip] of [[12, 10], [16, 14], [20, 18]]) if (dist(p[tip], p[0]) > dist(p[pip], p[0]) * 1.1) return false;
-  return true;
-}
-const palmCenter = (p) => ({ x: (p[0].x + p[9].x + p[13].x + p[17].x) / 4, y: (p[0].y + p[9].y + p[13].y + p[17].y) / 4 });
-// Pulgar "amartillado": bien separado de la línea del índice y del lado contrario a la palma.
-// (Al señalar para tocar cuerdas, el pulgar queda apoyado del lado de la palma: eso no cuenta.)
-function isThumbCocked(p, size) {
-  const fl = dist(p[5], p[8]) || 1;
-  const fx = (p[8].x - p[5].x) / fl, fy = (p[8].y - p[5].y) / fl;
-  const side = (q) => (q.x - p[5].x) * -fy + (q.y - p[5].y) * fx; // distancia con signo a la línea del índice
-  const thumb = side(p[4]), palm = side(palmCenter(p));
-  return thumb * palm < 0 && Math.abs(thumb) > size * 0.35;
-}
-
-// Vectores 3D (sirven igual para puntos 2D: z = 0)
-const sub3 = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) });
-const dot3 = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
-const len3 = (a) => Math.hypot(a.x, a.y, a.z) || 1e-9;
-const nrm3 = (a) => { const l = len3(a); return { x: a.x / l, y: a.y / l, z: a.z / l }; };
-const cross3 = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
-const angle3 = (a, b) => Math.acos(clamp(dot3(a, b) / (len3(a) * len3(b)), -1, 1));
-
-// Agarre: mayor, anular y meñique cerrados (el índice puede estar estirado o apretando el gatillo).
-// Con los puntos 3D no importa hacia dónde esté girada la mano.
-function isGripShape(p, w) {
-  const q = w || p;
-  return [[12, 10], [16, 14], [20, 18]].every(([tip, pip]) => len3(sub3(q[tip], q[0])) < len3(sub3(q[pip], q[0])) * 1.1);
-}
-// Cuánto está doblado el índice (radianes): 0 = estirado, ~1.5 = cerrado del todo.
-const indexBend = (p, w) => { const q = w || p; return angle3(sub3(q[6], q[5]), sub3(q[8], q[7])); };
 
 function updateGun(st, p, size, now, world) {
   if (!st.gun) {
@@ -611,7 +499,7 @@ function updateGun(st, p, size, now, world) {
   else if (g.firing && now - g.lastSound > 320) { squirtSound(0.6); g.lastSound = now; }
 }
 function spawnGun(st, p, size, now, world) {
-  const style = GUN_STYLES[Math.floor(Math.random() * GUN_STYLES.length)];
+  const style = randomGunStyle();
   st.gun = { style, born: performance.now(), firing: false, bend: 0, lostAt: 0, lastSound: 0, ox: p[5].x, oy: p[5].y, u: size, fx: 1, fy: 0, vx: 0, vy: 1 };
   st.gunHoldStart = 0; st.gunCharge = 0;
   if (st.pinching) endPinch(st);
@@ -623,7 +511,9 @@ function spawnGun(st, p, size, now, world) {
   setTimeout(() => pluckSound(quantize(990), 0.5, pan, 0.3), 110);
   if (!gunFound) {
     gunFound = true;
-    toast(`${style.rainbow ? "✨ ¡Encontraste la pistola de fantasía!" : "💦 ¡Encontraste la pistola de agua!"} Cerrá el índice para disparar.`, { ms: 4500 });
+    toast(`${style.rainbow ? "✨ ¡Encontraste la pistola de fantasía!" : "💦 ¡Encontraste la pistola de agua!"} Cerrá el índice para disparar.`, {
+      ms: 8000, action: { label: "Jugar 🎯", fn: () => { location.href = "juego/"; } },
+    });
   }
 }
 function dropGun(st) {
@@ -712,14 +602,13 @@ function squirtSound(vol) {
 // three.js se baja recién cuando alguien empieza a hacer la pistolita (no pesa para nadie más).
 // La pistola se arma con piezas simples (no hay modelo que descargar) y se dibuja en perspectiva
 // solo en un cuadrado alrededor de la mano, que después se copia al lienzo (así también sale en los clips).
-const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js";
 const GUN_FOV = 40;
 let gl3d = null, gl3dLoading = false, gl3dFailed = false;
 
 function loadGun3D() {
   if (gl3d || gl3dLoading || gl3dFailed) return;
   gl3dLoading = true;
-  import(THREE_URL)
+  loadThree()
     .then((T) => { gl3d = initGun3D(T); })
     .catch((e) => { gl3dFailed = true; console.warn("Sin 3D: la pistola queda en 2D.", e); })
     .finally(() => { gl3dLoading = false; });
@@ -729,92 +618,25 @@ function initGun3D(T) {
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
   renderer.setClearColor(0x000000, 0);
   const scene = new T.Scene();
-  scene.add(new T.HemisphereLight(0xffffff, 0x3a4660, 1.7));
-  const key = new T.DirectionalLight(0xffffff, 2.6); key.position.set(-0.6, 1, 1); scene.add(key);
-  const rim = new T.DirectionalLight(0x9fd8ff, 1.5); rim.position.set(1, -0.4, -0.8); scene.add(rim);
+  scene.environment = makeEnvironment(T, renderer);
+  scene.add(new T.HemisphereLight(0xffffff, 0x3a4660, 0.8));
+  const key = new T.DirectionalLight(0xffffff, 2.2); key.position.set(-0.6, 1, 1); scene.add(key);
+  const rim = new T.DirectionalLight(0x9fd8ff, 1.2); rim.position.set(1, -0.4, -0.8); scene.add(rim);
   return { T, renderer, scene, camera: new T.PerspectiveCamera(GUN_FOV, 1, 1, 50000), box: 0 };
 }
 
-// Orientación 3D de la mano: hacia dónde apunta el caño (f) y hacia dónde queda la palma (d),
-// en el sistema de la pantalla (x derecha, y abajo, z hacia adentro).
-// Igual que en 2D, la dirección del índice se guarda en el sistema de la palma (muñeca, nudillo del
-// índice y nudillo del meñique), así al cerrar el índice para disparar la pistola sigue apuntando derecho.
+// Pose 3D de la mano (handPose3D en lib/gestures.js): hacia dónde apunta el caño (f) y hacia dónde queda
+// la palma (d). La dirección se guarda relativa a la palma (cal3), así al cerrar el índice para disparar
+// la pistola sigue apuntando derecho.
 function aim3D(g, p, w, snap, calibrate = true) {
-  const a = nrm3(sub3(w[5], w[0]));
-  const n = nrm3(cross3(a, sub3(w[17], w[0])));
-  const b = cross3(n, a);
-  const finger = nrm3(sub3(w[8], w[5]));
-  const local = { x: dot3(finger, a), y: dot3(finger, b), z: dot3(finger, n) };
-  if (snap || !g.cal3) g.cal3 = local;
-  else if (calibrate) g.cal3 = nrm3({ x: g.cal3.x + (local.x - g.cal3.x) * 0.25, y: g.cal3.y + (local.y - g.cal3.y) * 0.25, z: g.cal3.z + (local.z - g.cal3.z) * 0.25 });
-  const c = g.cal3;
-  const f = nrm3({ x: a.x * c.x + b.x * c.y + n.x * c.z, y: a.y * c.x + b.y * c.y + n.y * c.z, z: a.z * c.x + b.z * c.y + n.z * c.z });
-  const palm = { x: (w[0].x + w[9].x + w[13].x + w[17].x) / 4, y: (w[0].y + w[9].y + w[13].y + w[17].y) / 4, z: (w[0].z + w[9].z + w[13].z + w[17].z) / 4 };
-  let d = sub3(palm, w[5]);
-  const along = dot3(d, f);
-  d = nrm3({ x: d.x - along * f.x, y: d.y - along * f.y, z: d.z - along * f.z });
-  // tamaño real de la mano en píxeles: píxeles por metro (con huesos de la palma) × largo de la mano en 3D
-  let px = 0, m = 0;
-  for (const [i, j] of [[0, 5], [0, 17], [5, 17], [0, 9]]) { px += dist(p[i], p[j]); m += Math.hypot(w[i].x - w[j].x, w[i].y - w[j].y); }
-  const u = m > 1e-4 ? (px / m) * len3(sub3(w[9], w[0])) : dist(p[0], p[9]);
-  g.t3 = { f, d, u, ox: p[5].x, oy: p[5].y };
-  if (snap || !g.c3) g.c3 = { f: { ...f }, d: { ...d }, u, ox: p[5].x, oy: p[5].y };
+  const pose = handPose3D(p, w, snap ? null : g.cal3, calibrate);
+  g.cal3 = pose.cal;
+  g.t3 = { f: pose.f, d: pose.d, u: pose.u, ox: pose.ox, oy: pose.oy };
+  if (snap || !g.c3) g.c3 = { f: { ...pose.f }, d: { ...pose.d }, u: pose.u, ox: pose.ox, oy: pose.oy };
 }
 
-// Modelo armado con piezas: x hacia adelante (caño), y hacia arriba (tanque), empuñadura hacia abajo.
-function buildGunModel(T, S) {
-  const group = new T.Group();
-  const plastic = (color) => new T.MeshPhysicalMaterial({ color, roughness: 0.3, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.12 });
-  const bodyMat = plastic(new T.Color(S.body[0]).lerp(new T.Color(S.body[1]), 0.55));
-  const gripMat = plastic(new T.Color(S.grip[0]).lerp(new T.Color(S.grip[1]), 0.5));
-  const accentMat = plastic(S.accent);
-  const nozzleMat = plastic(S.nozzle);
-  const add = (geo, mat, x, y, z = 0) => { const mesh = new T.Mesh(geo, mat); mesh.position.set(x, y, z); group.add(mesh); return mesh; };
-  const alongX = (mesh) => { mesh.rotation.z = -Math.PI / 2; return mesh; };
-
-  alongX(add(new T.CapsuleGeometry(0.19, 1.2, 8, 24), bodyMat, 0.45, 0));               // cuerpo
-  alongX(add(new T.CylinderGeometry(0.2, 0.2, 0.1, 28), accentMat, 0.85, 0));             // franja
-  alongX(add(new T.CylinderGeometry(0.08, 0.1, 0.32, 20), nozzleMat, 1.36, 0));           // caño
-  add(new T.TorusGeometry(0.075, 0.025, 10, 24), accentMat, 1.52, 0).rotation.y = Math.PI / 2; // punta
-  const grip = add(new T.CapsuleGeometry(0.15, 0.55, 8, 16), gripMat, -0.12, -0.5);       // empuñadura
-  grip.rotation.z = -0.22; grip.scale.z = 0.85;
-  add(new T.TorusGeometry(0.16, 0.03, 10, 24, Math.PI), gripMat, 0.32, -0.17).rotation.z = Math.PI; // guardamonte
-  const trigGeo = new T.BoxGeometry(0.05, 0.2, 0.08); trigGeo.translate(0, -0.1, 0);
-  const trigger = add(trigGeo, accentMat, 0.28, -0.16);                                   // gatillo
-  // tanque transparente con agua adentro
-  const water = add(new T.CylinderGeometry(0.16, 0.16, 0.4, 24), new T.MeshStandardMaterial({
-    color: S.rainbow ? 0xc58bff : 0x3aa8ff, emissive: S.rainbow ? 0x5a1a8a : 0x0a3a6a, emissiveIntensity: 0.5,
-    roughness: 0.2, transparent: true, opacity: 0.85,
-  }), 0.42, 0.3);
-  water.renderOrder = 1;
-  const tank = add(new T.CapsuleGeometry(0.2, 0.28, 8, 24), new T.MeshPhysicalMaterial({
-    color: 0xe6f8ff, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.3, depthWrite: false,
-  }), 0.42, 0.42);
-  tank.renderOrder = 2;
-  add(new T.CylinderGeometry(0.09, 0.1, 0.08, 20), accentMat, 0.42, 0.8);                 // tapa
-  const glow = add(new T.SphereGeometry(0.11, 16, 12), new T.MeshBasicMaterial({
-    color: S.rainbow ? 0xffb0f0 : 0xb0e8ff, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending,
-  }), 1.62, 0);
-  let gem = null;
-  if (S.rainbow) {
-    // fantasía: estrellas a los costados y una gema que gira atrás
-    const shape = new T.Shape();
-    for (let i = 0; i < 10; i++) {
-      const a = Math.PI / 2 + (i * Math.PI) / 5, r = i % 2 ? 0.04 : 0.095;
-      if (i === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r); else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-    }
-    shape.closePath();
-    const starGeo = new T.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 2 });
-    add(starGeo, accentMat, 0.22, 0, 0.18);
-    add(starGeo, accentMat, 0.22, 0, -0.18).rotation.y = Math.PI;
-    gem = add(new T.IcosahedronGeometry(0.1), new T.MeshStandardMaterial({ color: 0xffe27a, emissive: 0xff5fcf, emissiveIntensity: 0.9, roughness: 0.15, flatShading: true }), -0.42, 0.05);
-  }
-  return { group, trigger, water, glow, gem };
-}
 function disposeGunModel(model) {
-  if (!gl3d) return;
-  gl3d.scene.remove(model.group);
-  model.group.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+  if (gl3d) disposeObject(model.group);
 }
 
 function drawGun3D(g, now, k) {
@@ -824,25 +646,16 @@ function drawGun3D(g, now, k) {
   const c = g.c3, t = g.t3, a = 1 - Math.pow(0.5, k);
   for (const v of ["f", "d"]) for (const ax of ["x", "y", "z"]) c[v][ax] += (t[v][ax] - c[v][ax]) * a;
   c.u += (t.u - c.u) * a; c.ox += (t.ox - c.ox) * a; c.oy += (t.oy - c.oy) * a;
-  // pantalla (x der, y abajo, z adentro) → three.js (x der, y arriba, z hacia vos)
-  const F = new T.Vector3(c.f.x, -c.f.y, -c.f.z).normalize();
-  const D = new T.Vector3(c.d.x, -c.d.y, -c.d.z);
-  D.addScaledVector(F, -D.dot(F)).normalize();
-  const Y = D.clone().negate(), Z = new T.Vector3().crossVectors(F, Y);
+  // orientación de la mano (pantalla) → three.js
   const grp = g.model.group;
-  grp.quaternion.setFromRotationMatrix(new T.Matrix4().makeBasis(F, Y, Z));
+  const F = orientGun(T, grp, c.f, c.d);
   const age = performance.now() - g.born;
   const pop = age < 380 ? Math.max(0.01, easeOutBack(age / 380)) : 1;
   const D0 = (H / 2) / Math.tan((GUN_FOV * Math.PI) / 360); // a esta distancia, 1 unidad = 1 píxel
   grp.scale.setScalar(c.u * pop);
   grp.position.set(c.ox - W / 2, H / 2 - c.oy, -D0);
 
-  const m = g.model;
-  m.trigger.rotation.z = 0.12 - 0.6 * clamp01((g.bend - 0.2) / 0.9); // el gatillo se mueve con tu dedo
-  const level = 0.82 + Math.sin(now / 260) * 0.06;
-  m.water.scale.y = level; m.water.position.y = 0.12 + 0.2 * level;
-  m.glow.material.opacity = g.firing ? 0.5 + Math.random() * 0.3 : 0;
-  if (m.gem) m.gem.rotation.set(now / 900, now / 600, 0);
+  animateGun(g.model, { bend: g.bend, firing: g.firing, now });
   for (const st of Object.values(hands)) if (st.gun?.model) st.gun.model.group.visible = st.gun === g;
 
   // se dibuja solo un cuadrado alrededor de la mano
@@ -1532,7 +1345,7 @@ async function boot() {
     try { await startCamera(); }
     catch (e) {
       console.warn(e);
-      showIntroError(cameraErrorMessage(e), !["InsecureContextError", "UnsupportedError"].includes(e?.name));
+      showIntroError(cameraErrorMessage(e), canRetryCamera(e));
       return;
     }
     setStatus("Cargando el detector de manos (unos 15 MB la primera vez)…");

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Solo se puede ejecutar código de este sitio y de jsDelivr (MediaPipe y three.js). Los modelos se bajan de Google. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Tiro al vuelo · Cuerdas de luz</title>
+<meta name="description" content="Un juego de puntería con la pistola de agua de Cuerdas de luz: apuntá con la mano a la pantalla y mojá todo lo que vuela.">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cuerdas de luz">
+<meta property="og:title" content="Tiro al vuelo">
+<meta property="og:description" content="Hacé una pistolita con la mano, apuntá a la pantalla y mojá globos, aviones de papel y estrellas en 3D.">
+<meta property="og:url" content="https://darthfafo.github.io/cuerdas-de-luz/juego/">
+<meta property="og:image" content="https://darthfafo.github.io/cuerdas-de-luz/assets/og-juego.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="es_AR">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="stylesheet" href="../style.css">
+<link rel="stylesheet" href="juego.css">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs" crossorigin>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js" crossorigin>
+<script type="module" src="juego.js"></script>
+</head>
+<body class="game">
+<video id="video" playsinline muted></video>
+<canvas id="bg" aria-hidden="true"></canvas>
+<canvas id="gl" aria-hidden="true"></canvas>
+<canvas id="fx" aria-label="Juego de puntería"></canvas>
+
+<!-- Inicio: la cámara se ve desenfocada hasta que aparece la pistola -->
+<main id="intro" class="intro">
+  <section class="card glass" aria-labelledby="introTitle">
+    <h1 id="introTitle" class="eyebrow">Tiro al vuelo</h1>
+    <div class="ring" id="ring" aria-hidden="true">
+      <svg viewBox="0 0 132 132"><circle class="track" cx="66" cy="66" r="62"/><circle class="prog" id="prog" cx="66" cy="66" r="62"/></svg>
+      <span class="thumb">👉</span>
+    </div>
+    <p class="msg">Hacé una pistolita con la mano<br><span>y sostenela quieta un momento</span></p>
+    <ul class="how">
+      <li><span aria-hidden="true">🎯</span> Apuntá a la pantalla</li>
+      <li><span aria-hidden="true">☝️</span> Cerrá el índice para disparar</li>
+      <li><span aria-hidden="true">🎈</span> Mojá globos, aviones y estrellas</li>
+    </ul>
+    <p id="status" class="status" role="status" aria-live="polite">Preparando…</p>
+    <div id="introActions" class="actions" hidden>
+      <button class="btn primary" id="retryBtn" type="button">Reintentar</button>
+    </div>
+    <button class="link" id="pointerBtn" type="button"><span class="only-fine">Jugar con el mouse</span><span class="only-coarse">Jugar con el dedo</span></button>
+    <p class="fine">La cámara se procesa en tu dispositivo. No se sube nada a internet.</p>
+    <p class="credit"><a href="../">← Cuerdas de luz</a> · por <a href="https://github.com/darthfafo" target="_blank" rel="noopener noreferrer">Darth Fafo</a> &amp; Claude</p>
+  </section>
+</main>
+
+<!-- Marcador -->
+<header id="hud" class="hud">
+  <div class="hud-score"><span id="score">0</span><span id="combo" class="combo"></span></div>
+  <div class="hud-time" id="time">1:00</div>
+  <div class="hud-right">
+    <div class="tank" id="tank" title="Agua (se recarga sola cuando soltás el gatillo)"><div class="tank-fill" id="tankFill"></div></div>
+    <button class="btn icon" id="soundBtn" type="button" aria-pressed="true" aria-label="Silenciar" title="Sonido (M)">
+      <svg class="snd-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      <svg class="snd-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6M22 9l-6 6"/></svg>
+    </button>
+    <a class="btn icon" href="../" aria-label="Volver a Cuerdas de luz" title="Volver a Cuerdas de luz">✕</a>
+  </div>
+</header>
+
+<div id="count" class="count" aria-live="assertive"></div>
+<div id="label" class="label"></div>
+<div id="hint" class="game-hint" aria-live="polite"></div>
+
+<!-- Resultados -->
+<section id="results" class="results glass" aria-labelledby="resTitle" hidden>
+  <h2 id="resTitle">¡Se terminó!</h2>
+  <div class="res-score" id="resScore">0</div>
+  <p class="res-record" id="resRecord"></p>
+  <ul class="res-stats" id="resStats"></ul>
+  <div class="actions">
+    <button class="btn primary" id="againBtn" type="button">Otra vez</button>
+    <a class="btn" href="../">Cuerdas de luz</a>
+  </div>
+  <p class="fine">o disparale al globo del centro</p>
+</section>
+
+<div id="toast" class="toast glass" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">Tiro al vuelo necesita JavaScript activado.</p></noscript>
+</body>
+</html>

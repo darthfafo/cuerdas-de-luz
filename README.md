@@ -74,12 +74,43 @@ Hacé una **pistolita** con la mano (índice estirado, pulgar para arriba y los 
 
 Por dentro: MediaPipe también da los puntos de la mano en 3D, y con eso se calcula hacia dónde apunta el índice y hacia dónde mira la palma. La pistola se arma con piezas de [three.js](https://threejs.org) (cápsulas, cilindros, un toro), que se baja recién cuando empezás a hacer el gesto. Se dibuja en perspectiva solo en un cuadrado alrededor de la mano, y si el navegador no tiene WebGL queda una versión 2D.
 
+Y cuando la encontrás, aparece un botón para ir a **Tiro al vuelo**, el juego de la pistola (más abajo).
+
 </details>
+
+## 🎯 Tiro al vuelo, el juego de la pistola
+
+<p align="center">
+  <a href="https://darthfafo.github.io/cuerdas-de-luz/juego/"><img src="assets/og-juego.png" alt="Tiro al vuelo: globos, un avión de papel y una estrella dorada con una mira y un chorro de agua" width="640"></a>
+</p>
+
+Una variante aparte, solo con la pistola de agua: **[darthfafo.github.io/cuerdas-de-luz/juego](https://darthfafo.github.io/cuerdas-de-luz/juego/)**
+
+1. Hacé la **pistolita** con la mano y sostenela un momento: aparece la pistola.
+2. **Apuntá a la pantalla**, como con una pistola de luz. La mira va adonde apunta el caño.
+3. **Cerrá el índice** frente al globo del centro: ese primer disparo calibra la mira y arranca la partida.
+4. Tenés **60 segundos** para mojar todo lo que vuela antes de que se escape, sobre la imagen de tu cámara y en 3D.
+
+| Blanco | Puntos | |
+|---|---:|---|
+| 🎈 Globo | 100 | Sube flotando; con un chorrito revienta |
+| ✈️ Avión de papel | 150 | Cruza la pantalla y, mojado, se viene abajo girando |
+| ⭐ Estrella dorada | 500 | Aparece poco, va rápido y en zigzag |
+
+- **Combo:** cada 3 aciertos seguidos el multiplicador sube (hasta ×5). Si se te escapa uno, vuelve a ×1.
+- **Agua:** el tanque se vacía mientras disparás y se recarga solo cuando soltás el gatillo. El agua del tanque de la pistola 3D baja de verdad.
+- **Si el chorro no pega en nada**, las gotas quedan en el "vidrio" de la pantalla y chorrean.
+- **Sin cámara:** tocá *Jugar con el mouse* (o *con el dedo* en el celu).
+- **Teclas:** `+` / `-` cambian la sensibilidad de la mira, `M` el sonido.
+- El récord se guarda en tu navegador.
+
+**Cómo apunta:** con los puntos 3D de la mano se calcula la dirección del caño. Si apuntás derecho a la cámara la mira queda en el centro, y si girás la muñeca se mueve, como un puntero láser. Como cada uno se para distinto, el primer disparo al globo del centro calibra la mira. Además hay una ayuda de puntería: los blancos se pueden acertar desde un poco más lejos de lo que parece, porque el tracking de un dedo que apunta a la cámara nunca es perfecto.
 
 ## Privacidad
 
 - El video de la cámara **nunca sale de tu compu**. No hay servidor, ni cuentas, ni cookies, ni analytics.
-- Lo único que se baja de internet son los modelos de detección de MediaPipe (desde jsDelivr y Google).
+- Lo único que se baja de internet son los modelos de detección de MediaPipe y, para la pistola y el juego, three.js (desde jsDelivr y Google).
+- El récord del juego se guarda solo en tu navegador.
 - Los clips se arman en tu navegador y solo existen si los descargás.
 - La página tiene una *Content Security Policy*: solo puede ejecutar código de este sitio y de jsDelivr.
 
@@ -129,11 +160,16 @@ Después abrí <http://localhost:8766>. La cámara solo anda en `localhost` o co
 > **Para desarrollar sin webcam:** en localhost podés usar un video en lugar de la cámara con `http://localhost:8766/?video=mi-clip.mp4`.
 
 ```
-index.html             la página, los metadatos y la Content Security Policy
-style.css              estilos
-app.js                 todo lo demás: tracking, gestos, física, sonido y grabación
+index.html             la página de las cuerdas, los metadatos y la Content Security Policy
+style.css              estilos (compartidos con el juego)
+app.js                 las cuerdas: tracking, gestos, física, sonido, grabación y el easter egg
+juego/                 Tiro al vuelo: página, estilos y juego.js (blancos 3D, puntería, puntaje)
+lib/camera.js          abrir la cámara, errores, mapeo a la pantalla
+lib/vision.js          cargar los modelos de MediaPipe
+lib/gestures.js        gestos (pulgar arriba, pistolita, gatillo) y la pose 3D de la mano
+lib/gun3d.js           la pistola de agua en 3D (three.js) y los reflejos
 manifest.webmanifest   para instalarla como app en el celu
-assets/                íconos e imagen para compartir en redes
+assets/                íconos e imágenes para compartir en redes
 ```
 
 ## Navegadores

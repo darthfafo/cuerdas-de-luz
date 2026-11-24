@@ -532,7 +532,8 @@ function checkGate(list, now) {
 
 // ───────────────────────── Easter egg: pistola de agua ─────────────────────────
 // Hacé una "pistolita" con la mano (índice estirado, pulgar para arriba, el resto cerrado)
-// y sostenela quieta 2 segundos: aparece una pistola de agua (o una de fantasía). Bajá el pulgar para disparar.
+// y sostenela quieta 2 segundos: aparece una pistola de agua (o una de fantasía).
+// Para disparar, cerrá el índice como si apretaras el gatillo de una pistola de verdad.
 const GUN_HOLD_MS = 2000;
 const MAX_DROPS = 400;
 const GUN_STYLES = [
@@ -565,6 +566,23 @@ function isThumbCocked(p, size) {
   return thumb * palm < 0 && Math.abs(thumb) > size * 0.35;
 }
 
+// Vectores 3D (sirven igual para puntos 2D: z = 0)
+const sub3 = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) });
+const dot3 = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+const len3 = (a) => Math.hypot(a.x, a.y, a.z) || 1e-9;
+const nrm3 = (a) => { const l = len3(a); return { x: a.x / l, y: a.y / l, z: a.z / l }; };
+const cross3 = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+const angle3 = (a, b) => Math.acos(clamp(dot3(a, b) / (len3(a) * len3(b)), -1, 1));
+
+// Agarre: mayor, anular y meñique cerrados (el índice puede estar estirado o apretando el gatillo).
+// Con los puntos 3D no importa hacia dónde esté girada la mano.
+function isGripShape(p, w) {
+  const q = w || p;
+  return [[12, 10], [16, 14], [20, 18]].every(([tip, pip]) => len3(sub3(q[tip], q[0])) < len3(sub3(q[pip], q[0])) * 1.1);
+}
+// Cuánto está doblado el índice (radianes): 0 = estirado, ~1.5 = cerrado del todo.
+const indexBend = (p, w) => { const q = w || p; return angle3(sub3(q[6], q[5]), sub3(q[8], q[7])); };
+
 function updateGun(st, p, size, now, world) {
   if (!st.gun) {
     // hay que sostener la pistolita quieta (así no salta mientras tocás cuerdas con el índice)
@@ -577,20 +595,24 @@ function updateGun(st, p, size, now, world) {
     return;
   }
   const g = st.gun;
-  if (isGunShape(p)) g.lostAt = 0;
+  if (isGripShape(p, world)) g.lostAt = 0;
   else if (!g.lostAt) g.lostAt = now;
   else if (now - g.lostAt > 600) { dropGun(st); return; } // abriste la mano: chau pistola
-  aimGun(g, p, size, false);
-  if (world) aim3D(g, p, world, false);
-  // gatillo: bajar el pulgar hacia el índice (con histéresis)
-  const trig = Math.min(dist(p[4], p[6]), dist(p[4], p[5])) / size;
-  if (!g.firing && trig < 0.4) { g.firing = true; squirtSound(1); g.lastSound = now; }
-  else if (g.firing && trig > 0.5) g.firing = false;
+
+  // Gatillo: cerrar el índice, como en una pistola de verdad (con histéresis para que no titile).
+  const bend = indexBend(p, world);
+  g.bend += (bend - g.bend) * 0.6;
+  // con el índice estirado la pistola se alinea con el dedo; al apretar el gatillo queda firme con la palma
+  const calibrate = !g.firing && g.bend < 0.45;
+  aimGun(g, p, size, false, calibrate);
+  if (world) aim3D(g, p, world, false, calibrate);
+  if (!g.firing && g.bend > 1.0) { g.firing = true; squirtSound(1); g.lastSound = now; }
+  else if (g.firing && g.bend < 0.6) g.firing = false;
   else if (g.firing && now - g.lastSound > 320) { squirtSound(0.6); g.lastSound = now; }
 }
 function spawnGun(st, p, size, now, world) {
   const style = GUN_STYLES[Math.floor(Math.random() * GUN_STYLES.length)];
-  st.gun = { style, born: performance.now(), firing: false, lostAt: 0, lastSound: 0, ox: p[5].x, oy: p[5].y, u: size, fx: 1, fy: 0, vx: 0, vy: 1 };
+  st.gun = { style, born: performance.now(), firing: false, bend: 0, lostAt: 0, lastSound: 0, ox: p[5].x, oy: p[5].y, u: size, fx: 1, fy: 0, vx: 0, vy: 1 };
   st.gunHoldStart = 0; st.gunCharge = 0;
   if (st.pinching) endPinch(st);
   aimGun(st.gun, p, size, true);
@@ -601,7 +623,7 @@ function spawnGun(st, p, size, now, world) {
   setTimeout(() => pluckSound(quantize(990), 0.5, pan, 0.3), 110);
   if (!gunFound) {
     gunFound = true;
-    toast(style.rainbow ? "✨ ¡Encontraste la pistola de fantasía! Bajá el pulgar para disparar." : "💦 ¡Encontraste la pistola de agua! Bajá el pulgar para disparar.", { ms: 4500 });
+    toast(`${style.rainbow ? "✨ ¡Encontraste la pistola de fantasía!" : "💦 ¡Encontraste la pistola de agua!"} Cerrá el índice para disparar.`, { ms: 4500 });
   }
 }
 function dropGun(st) {
@@ -612,10 +634,16 @@ function dropGun(st) {
   }
   st.gun = null; st.gunHoldStart = 0; st.gunCharge = 0;
 }
-// La pistola sigue al índice: el caño apunta como el dedo y la empuñadura va hacia la palma.
-function aimGun(g, p, size, snap) {
-  const fl = dist(p[5], p[8]) || 1;
-  const fx = (p[8].x - p[5].x) / fl, fy = (p[8].y - p[5].y) / fl;
+// La pistola sigue a la mano: el caño apunta como el índice estirado y la empuñadura va hacia la palma.
+// La dirección se guarda relativa a la palma (muñeca → nudillo del índice), así al cerrar el índice
+// para disparar la pistola no se tuerce.
+const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+function aimGun(g, p, size, snap, calibrate = true) {
+  const palmAng = Math.atan2(p[5].y - p[0].y, p[5].x - p[0].x);
+  const fingerAng = Math.atan2(p[8].y - p[5].y, p[8].x - p[5].x);
+  if (snap || g.off2 === undefined) g.off2 = wrapAngle(fingerAng - palmAng);
+  else if (calibrate) g.off2 += wrapAngle(fingerAng - palmAng - g.off2) * 0.25;
+  const fx = Math.cos(palmAng + g.off2), fy = Math.sin(palmAng + g.off2);
   const palm = palmCenter(p);
   const side = Math.sign((palm.x - p[5].x) * -fy + (palm.y - p[5].y) * fx) || 1;
   const t = snap ? 1 : 0.5;
@@ -707,21 +735,28 @@ function initGun3D(T) {
   return { T, renderer, scene, camera: new T.PerspectiveCamera(GUN_FOV, 1, 1, 50000), box: 0 };
 }
 
-// Orientación 3D de la mano: hacia dónde apunta el índice (f) y hacia dónde queda la palma (d),
+// Orientación 3D de la mano: hacia dónde apunta el caño (f) y hacia dónde queda la palma (d),
 // en el sistema de la pantalla (x derecha, y abajo, z hacia adentro).
-function aim3D(g, p, w, snap) {
-  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
-  const len = (a) => Math.hypot(a.x, a.y, a.z) || 1e-9;
-  const nrm = (a) => { const l = len(a); return { x: a.x / l, y: a.y / l, z: a.z / l }; };
-  const f = nrm(sub(w[8], w[5]));
+// Igual que en 2D, la dirección del índice se guarda en el sistema de la palma (muñeca, nudillo del
+// índice y nudillo del meñique), así al cerrar el índice para disparar la pistola sigue apuntando derecho.
+function aim3D(g, p, w, snap, calibrate = true) {
+  const a = nrm3(sub3(w[5], w[0]));
+  const n = nrm3(cross3(a, sub3(w[17], w[0])));
+  const b = cross3(n, a);
+  const finger = nrm3(sub3(w[8], w[5]));
+  const local = { x: dot3(finger, a), y: dot3(finger, b), z: dot3(finger, n) };
+  if (snap || !g.cal3) g.cal3 = local;
+  else if (calibrate) g.cal3 = nrm3({ x: g.cal3.x + (local.x - g.cal3.x) * 0.25, y: g.cal3.y + (local.y - g.cal3.y) * 0.25, z: g.cal3.z + (local.z - g.cal3.z) * 0.25 });
+  const c = g.cal3;
+  const f = nrm3({ x: a.x * c.x + b.x * c.y + n.x * c.z, y: a.y * c.x + b.y * c.y + n.y * c.z, z: a.z * c.x + b.z * c.y + n.z * c.z });
   const palm = { x: (w[0].x + w[9].x + w[13].x + w[17].x) / 4, y: (w[0].y + w[9].y + w[13].y + w[17].y) / 4, z: (w[0].z + w[9].z + w[13].z + w[17].z) / 4 };
-  let d = sub(palm, w[5]);
-  const along = d.x * f.x + d.y * f.y + d.z * f.z;
-  d = nrm({ x: d.x - along * f.x, y: d.y - along * f.y, z: d.z - along * f.z });
+  let d = sub3(palm, w[5]);
+  const along = dot3(d, f);
+  d = nrm3({ x: d.x - along * f.x, y: d.y - along * f.y, z: d.z - along * f.z });
   // tamaño real de la mano en píxeles: píxeles por metro (con huesos de la palma) × largo de la mano en 3D
   let px = 0, m = 0;
-  for (const [a, b] of [[0, 5], [0, 17], [5, 17], [0, 9]]) { px += dist(p[a], p[b]); m += Math.hypot(w[a].x - w[b].x, w[a].y - w[b].y); }
-  const u = m > 1e-4 ? (px / m) * len(sub(w[9], w[0])) : dist(p[0], p[9]);
+  for (const [i, j] of [[0, 5], [0, 17], [5, 17], [0, 9]]) { px += dist(p[i], p[j]); m += Math.hypot(w[i].x - w[j].x, w[i].y - w[j].y); }
+  const u = m > 1e-4 ? (px / m) * len3(sub3(w[9], w[0])) : dist(p[0], p[9]);
   g.t3 = { f, d, u, ox: p[5].x, oy: p[5].y };
   if (snap || !g.c3) g.c3 = { f: { ...f }, d: { ...d }, u, ox: p[5].x, oy: p[5].y };
 }
@@ -803,7 +838,7 @@ function drawGun3D(g, now, k) {
   grp.position.set(c.ox - W / 2, H / 2 - c.oy, -D0);
 
   const m = g.model;
-  m.trigger.rotation.z = g.firing ? -0.45 : 0.12;
+  m.trigger.rotation.z = 0.12 - 0.6 * clamp01((g.bend - 0.2) / 0.9); // el gatillo se mueve con tu dedo
   const level = 0.82 + Math.sin(now / 260) * 0.06;
   m.water.scale.y = level; m.water.position.y = 0.12 + 0.2 * level;
   m.glow.material.opacity = g.firing ? 0.5 + Math.random() * 0.3 : 0;
@@ -883,7 +918,7 @@ function drawWaterGun(g, now) {
   // guardamonte y gatillo
   ctx.beginPath(); ctx.moveTo(0.12, 0.12); ctx.quadraticCurveTo(0.33, 0.62, 0.54, 0.12);
   ctx.strokeStyle = S.grip[1]; ctx.lineWidth = 0.06; ctx.stroke();
-  ctx.save(); ctx.translate(0.27, 0.13); ctx.rotate(g.firing ? 0.5 : 0.18);
+  ctx.save(); ctx.translate(0.27, 0.13); ctx.rotate(0.18 + 0.35 * clamp01((g.bend - 0.2) / 0.9));
   roundRect(-0.03, 0, 0.06, 0.24, 0.03); ctx.fillStyle = S.accent; ctx.fill(); ctx.restore();
 
   // tanque con agua que se mueve

@@ -70,7 +70,7 @@ Tocá **Grabar clip**: tenés una cuenta regresiva de 3 segundos para acomodar l
 
 <br>
 
-Hacé una **pistolita** con la mano (índice estirado, pulgar para arriba y los otros dedos cerrados) y **sostenela quieta 2 segundos**. Aparece una pistola de agua 3D o, si tenés suerte, una de fantasía que tira agua arcoíris. Gira en perspectiva con tu mano, incluso si apuntás hacia la cámara. **Bajá el pulgar** para disparar: si el chorro pega en una cuerda, la hace sonar. Para guardarla, abrí la mano.
+Hacé una **pistolita** con la mano (índice estirado, pulgar para arriba y los otros dedos cerrados) y **sostenela quieta 2 segundos**. Aparece una pistola de agua 3D o, si tenés suerte, una de fantasía que tira agua arcoíris. Gira en perspectiva con tu mano, incluso si apuntás hacia la cámara. Para disparar, **cerrá el índice** como si apretaras el gatillo de una pistola de verdad (el gatillo del modelo se mueve con tu dedo y la pistola sigue apuntando derecho). Si el chorro pega en una cuerda, la hace sonar. Para guardarla, abrí la mano.
 
 Por dentro: MediaPipe también da los puntos de la mano en 3D, y con eso se calcula hacia dónde apunta el índice y hacia dónde mira la palma. La pistola se arma con piezas de [three.js](https://threejs.org) (cápsulas, cilindros, un toro), que se baja recién cuando empezás a hacer el gesto. Se dibuja en perspectiva solo en un cuadrado alrededor de la mano, y si el navegador no tiene WebGL queda una versión 2D.
 

@@ -10,7 +10,7 @@
 import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "./lib/camera.js";
 import { loadVision } from "./lib/vision.js";
 import {
-  clamp, clamp01, dist, midpoint, palmCenter, isThumbsUp, isGunShape, isThumbCocked, isGripShape, indexBend, handPose3D,
+  clamp, clamp01, dist, midpoint, palmCenter, isThumbsUp, isGunShape, isThumbCocked, isGripShape, isFist, indexBend, handPose3D,
 } from "./lib/gestures.js";
 import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun } from "./lib/gun3d.js";
 
@@ -393,6 +393,7 @@ function processHands(list, now) {
     const stale = now - st.seen > 200;
     st.seen = now; st.pts = pts;
     const size = dist(pts[0], pts[9]);
+    st.fist = isFist(pts, world);
 
     // Easter egg: con la pistola en la mano, el índice no pellizca ni toca (dispara agua).
     updateGun(st, pts, size, now, world);
@@ -404,7 +405,7 @@ function processHands(list, now) {
     const m = midpoint(thumb, index);
     st.pinchPos = stale || !st.pinchPos ? m : { x: st.pinchPos.x * 0.45 + m.x * 0.55, y: st.pinchPos.y * 0.45 + m.y * 0.55 };
     if (!st.pinching) {
-      if (pd < size * 0.28) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; st.pinchStart = { ...st.pinchPos }; } }
+      if (pd < size * 0.28 && fistCharge <= 0.15) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; st.pinchStart = { ...st.pinchPos }; } }
       else st.pinchFrames = 0;
     } else if (pd > size * 0.45) {
       if (++st.releaseFrames >= 2) endPinch(st);
@@ -418,13 +419,18 @@ function processHands(list, now) {
     if (seen.has(key)) continue;
     const st = hands[key];
     if (st.pinching && now - st.seen > 250) endPinch(st);
-    if (now - st.seen > 150) { st.prevTip = null; st.pts = null; st.gunHoldStart = 0; st.gunCharge = 0; }
+    if (now - st.seen > 150) { st.prevTip = null; st.pts = null; st.gunHoldStart = 0; st.gunCharge = 0; st.fist = false; }
     if (st.gun && now - st.seen > 400) dropGun(st);
   }
   // Puente: con las dos pinzas cerradas se estira una cuerda; al soltar queda fija.
   // En el celu también vale con una sola mano: pinza, arrastrar y soltar.
   const live = (st) => st.pinching && st.pinchPos && now - st.seen < 250;
   const L = hands.L, R = hands.R;
+  checkFists(now);
+  if (fistCharge > 0.15) { // cerrar los dos puños no deja una cuerda por accidente
+    bridge = null;
+    for (const st of [L, R]) if (st.pinching) endPinch(st);
+  }
   if (live(L) && live(R)) {
     bridge = { a: { ...L.pinchPos }, b: { ...R.pinchPos }, two: true };
   } else if (bridge?.two) {
@@ -437,6 +443,39 @@ function processHands(list, now) {
   } else if (bridge) {
     if (dist(bridge.a, bridge.b) > MIN_SOLO_PX) addString(bridge.a, bridge.b);
     bridge = null;
+  }
+}
+// Dos puños cerrados durante 2 segundos: se borran todas las cuerdas.
+const FIST_HOLD_MS = 2000;
+let fistStart = 0, fistLast = 0, fistCharge = 0, fistDone = false;
+function checkFists(now) {
+  const L = hands.L, R = hands.R;
+  const both = L.fist && R.fist && !L.gun && !R.gun && now - L.seen < 250 && now - R.seen < 250;
+  if (!both) {
+    if (now - fistLast > 300) { fistStart = 0; fistCharge = 0; fistDone = false; } // aguanta parpadeos del tracking
+    return;
+  }
+  fistLast = now;
+  if (!fistStart) fistStart = now;
+  fistCharge = clamp01((now - fistStart) / FIST_HOLD_MS);
+  if (fistCharge >= 1 && !fistDone) {
+    fistDone = true; // no vuelve a borrar hasta que abras las manos
+    const had = strings.length;
+    clearStrings();
+    toast(had ? "🧹 Pantalla limpia" : "🧹 No había cuerdas para borrar", { ms: 1800 });
+  }
+}
+function drawFistCharge() {
+  if (fistCharge < 0.1 || fistDone) return;
+  for (const st of [hands.L, hands.R]) {
+    if (!st.pts) continue;
+    const c = palmCenter(st.pts), r = dist(st.pts[0], st.pts[9]) * 0.95;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,150,190,0.95)"; ctx.shadowColor = "rgba(255,150,190,0.9)"; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fistCharge); ctx.stroke();
+    ctx.restore();
   }
 }
 function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; st.soloBlocked = false; }
@@ -979,6 +1018,7 @@ function render(now, k) {
     if (!st.gun) drawCursor(st);
     drawGunCharge(st);
   }
+  drawFistCharge();
   for (const st of Object.values(hands)) {
     const g = st.gun;
     if (!g) continue;

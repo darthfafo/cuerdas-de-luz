@@ -29,6 +29,7 @@ No se instala nada, no hay que crear cuenta y no hay servidor: todo pasa en tu n
 | 🤏 🤏 Pinza (pulgar + índice) con **las dos manos** | Aparece una cuerda entre las dos pinzas. Estirala como quieras |
 | ✋ Soltar cualquiera de las dos pinzas | La cuerda queda fija en el aire |
 | ☝️ Pasar el índice a través de una cuerda | La tocás. Más rápido, más fuerte |
+| ✊ ✊ Los dos puños cerrados 2 segundos | Se borran todas las cuerdas (un anillo te muestra la carga) |
 | 🖱️ Arrastrar / pasar por encima | Lo mismo con el mouse, o con el dedo en el celu |
 
 > ¿El 👍 no te sale? Tocá **Empezar sin gesto** o apretá `Enter`. ¿No tenés cámara? Está **Usar sin cámara**.

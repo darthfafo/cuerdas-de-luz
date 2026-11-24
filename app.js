@@ -420,6 +420,7 @@ function updatePerson(now) {
 const newHand = () => ({
   pts: null, seen: -1e9, pinching: false, pinchPos: null, pinchStart: null, soloBlocked: false,
   pinchFrames: 0, releaseFrames: 0, prevTip: null, prevT: 0,
+  gun: null, gunHoldStart: 0, gunHoldAt: null, gunCharge: 0, // easter egg
 });
 const hands = { L: newHand(), R: newHand() };
 
@@ -450,9 +451,13 @@ function processHands(list, now) {
     const st = hands[key];
     const stale = now - st.seen > 200;
     st.seen = now; st.pts = pts;
+    const size = dist(pts[0], pts[9]);
+
+    // Easter egg: con la pistola en la mano, el índice no pellizca ni toca (dispara agua).
+    updateGun(st, pts, size, now);
+    if (st.gun) { if (st.pinching) endPinch(st); st.prevTip = null; continue; }
 
     // Pinza: distancia pulgar-índice relativa al tamaño de la mano, con histéresis para que no parpadee.
-    const size = dist(pts[0], pts[9]);
     const thumb = pts[4], index = pts[8];
     const pd = dist(thumb, index);
     const m = midpoint(thumb, index);
@@ -472,7 +477,8 @@ function processHands(list, now) {
     if (seen.has(key)) continue;
     const st = hands[key];
     if (st.pinching && now - st.seen > 250) endPinch(st);
-    if (now - st.seen > 150) { st.prevTip = null; st.pts = null; }
+    if (now - st.seen > 150) { st.prevTip = null; st.pts = null; st.gunHoldStart = 0; st.gunCharge = 0; }
+    if (st.gun && now - st.seen > 400) dropGun(st);
   }
   // Puente: con las dos pinzas cerradas se estira una cuerda; al soltar queda fija.
   // En el celu también vale con una sola mano: pinza, arrastrar y soltar.
@@ -520,6 +526,245 @@ function checkGate(list, now) {
       : IS_TOUCH ? "Mostrale una mano a la cámara" : "Mostrale la mano derecha a la cámara");
   }
   if (thumbHold >= THUMB_HOLD_MS) start();
+}
+
+// ───────────────────────── Easter egg: pistola de agua ─────────────────────────
+// Hacé una "pistolita" con la mano (índice estirado, pulgar para arriba, el resto cerrado)
+// y sostenela quieta 2 segundos: aparece una pistola de agua (o una de fantasía). Bajá el pulgar para disparar.
+const GUN_HOLD_MS = 2000;
+const MAX_DROPS = 400;
+const GUN_STYLES = [
+  { name: "agua", body: ["#8ff6ff", "#1aa7ff"], grip: ["#ffb347", "#ff7a1a"], accent: "#ffd93b", nozzle: "#ff7a1a", rainbow: false },
+  { name: "fantasía", body: ["#f3b4ff", "#8a4dff"], grip: ["#ff9ad9", "#e0409a"], accent: "#ffe27a", nozzle: "#ffe27a", rainbow: true },
+];
+const drops = [];
+let gunFound = false;
+
+const angleBetween = (a, b) =>
+  Math.acos(clamp((a.x * b.x + a.y * b.y) / ((Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y)) || 1), -1, 1));
+const easeOutBack = (t) => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+
+// Índice estirado y derecho; mayor, anular y meñique cerrados. El pulgar puede estar arriba o abajo (gatillo).
+function isGunShape(p) {
+  if (dist(p[8], p[0]) < dist(p[6], p[0]) * 1.15) return false;
+  const a = { x: p[6].x - p[5].x, y: p[6].y - p[5].y }, b = { x: p[8].x - p[6].x, y: p[8].y - p[6].y };
+  if (angleBetween(a, b) > 0.6) return false;
+  for (const [tip, pip] of [[12, 10], [16, 14], [20, 18]]) if (dist(p[tip], p[0]) > dist(p[pip], p[0]) * 1.1) return false;
+  return true;
+}
+const palmCenter = (p) => ({ x: (p[0].x + p[9].x + p[13].x + p[17].x) / 4, y: (p[0].y + p[9].y + p[13].y + p[17].y) / 4 });
+// Pulgar "amartillado": bien separado de la línea del índice y del lado contrario a la palma.
+// (Al señalar para tocar cuerdas, el pulgar queda apoyado del lado de la palma: eso no cuenta.)
+function isThumbCocked(p, size) {
+  const fl = dist(p[5], p[8]) || 1;
+  const fx = (p[8].x - p[5].x) / fl, fy = (p[8].y - p[5].y) / fl;
+  const side = (q) => (q.x - p[5].x) * -fy + (q.y - p[5].y) * fx; // distancia con signo a la línea del índice
+  const thumb = side(p[4]), palm = side(palmCenter(p));
+  return thumb * palm < 0 && Math.abs(thumb) > size * 0.35;
+}
+
+function updateGun(st, p, size, now) {
+  if (!st.gun) {
+    // hay que sostener la pistolita quieta (así no salta mientras tocás cuerdas con el índice)
+    if (isGunShape(p) && isThumbCocked(p, size) && !st.pinching) {
+      if (!st.gunHoldStart || dist(p[8], st.gunHoldAt) > size * 0.8) { st.gunHoldStart = now; st.gunHoldAt = { ...p[8] }; }
+      st.gunCharge = clamp01((now - st.gunHoldStart) / GUN_HOLD_MS);
+      if (st.gunCharge >= 1) spawnGun(st, p, size, now);
+    } else { st.gunHoldStart = 0; st.gunCharge = 0; }
+    return;
+  }
+  const g = st.gun;
+  if (isGunShape(p)) g.lostAt = 0;
+  else if (!g.lostAt) g.lostAt = now;
+  else if (now - g.lostAt > 600) { dropGun(st); return; } // abriste la mano: chau pistola
+  aimGun(g, p, size, false);
+  // gatillo: bajar el pulgar hacia el índice (con histéresis)
+  const trig = Math.min(dist(p[4], p[6]), dist(p[4], p[5])) / size;
+  if (!g.firing && trig < 0.4) { g.firing = true; squirtSound(1); g.lastSound = now; }
+  else if (g.firing && trig > 0.5) g.firing = false;
+  else if (g.firing && now - g.lastSound > 320) { squirtSound(0.6); g.lastSound = now; }
+}
+function spawnGun(st, p, size, now) {
+  const style = GUN_STYLES[Math.floor(Math.random() * GUN_STYLES.length)];
+  st.gun = { style, born: performance.now(), firing: false, lostAt: 0, lastSound: 0, ox: p[5].x, oy: p[5].y, u: size, fx: 1, fy: 0, vx: 0, vy: 1 };
+  st.gunHoldStart = 0; st.gunCharge = 0;
+  if (st.pinching) endPinch(st);
+  aimGun(st.gun, p, size, true);
+  spawnSparks(midpoint(p[5], p[8]), style.rainbow ? 290 : 195, 40);
+  const pan = (p[5].x / W) * 2 - 1;
+  pluckSound(quantize(660), 0.5, pan, 0.3);
+  setTimeout(() => pluckSound(quantize(990), 0.5, pan, 0.3), 110);
+  if (!gunFound) {
+    gunFound = true;
+    toast(style.rainbow ? "✨ ¡Encontraste la pistola de fantasía! Bajá el pulgar para disparar." : "💦 ¡Encontraste la pistola de agua! Bajá el pulgar para disparar.", { ms: 4500 });
+  }
+}
+function dropGun(st) {
+  const g = st.gun;
+  if (g) spawnSparks(gunPoint(g, 0.5, 0), g.style.rainbow ? 290 : 195, 18);
+  st.gun = null; st.gunHoldStart = 0; st.gunCharge = 0;
+}
+// La pistola sigue al índice: el caño apunta como el dedo y la empuñadura va hacia la palma.
+function aimGun(g, p, size, snap) {
+  const fl = dist(p[5], p[8]) || 1;
+  const fx = (p[8].x - p[5].x) / fl, fy = (p[8].y - p[5].y) / fl;
+  const palm = palmCenter(p);
+  const side = Math.sign((palm.x - p[5].x) * -fy + (palm.y - p[5].y) * fx) || 1;
+  const t = snap ? 1 : 0.5;
+  g.ox += (p[5].x - g.ox) * t; g.oy += (p[5].y - g.oy) * t; g.u += (size - g.u) * t;
+  g.fx += (fx - g.fx) * t; g.fy += (fy - g.fy) * t;
+  const n = Math.hypot(g.fx, g.fy) || 1; g.fx /= n; g.fy /= n;
+  g.vx = -g.fy * side; g.vy = g.fx * side;
+}
+// Punto de la pistola (en unidades de "tamaño de mano") → pantalla.
+const gunPoint = (g, x, y) => ({ x: g.ox + (g.fx * x + g.vx * y) * g.u, y: g.oy + (g.fy * x + g.vy * y) * g.u });
+
+function emitDrops(g, k, now) {
+  const tip = gunPoint(g, 1.5, -0.02);
+  const speed = clamp(Math.min(W, H) / 700, 0.6, 1.4);
+  const n = Math.max(1, Math.round(3 * k));
+  for (let i = 0; i < n; i++) {
+    const sp = (9 + Math.random() * 4) * speed, spread = (Math.random() - 0.5) * 1.1;
+    drops.push({
+      x: tip.x, y: tip.y, life: 1, r: 1.5 + Math.random() * 1.8,
+      vx: g.fx * sp + g.vx * spread, vy: g.fy * sp + g.vy * spread,
+      hue: g.style.rainbow ? (now / 4 + Math.random() * 60) % 360 : null,
+    });
+  }
+  if (drops.length > MAX_DROPS) drops.splice(0, drops.length - MAX_DROPS);
+}
+// Las gotas caen con gravedad; si cruzan una cuerda, la tocan y salpican.
+function drawDrops(k) {
+  if (!drops.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+  let w = 0;
+  for (const d of drops) {
+    const prev = { x: d.x, y: d.y };
+    d.vy += 0.32 * k; d.x += d.vx * k; d.y += d.vy * k; d.life -= 0.012 * k;
+    if (d.life <= 0 || d.y > H + 20 || d.x < -20 || d.x > W + 20) continue;
+    if (strings.length && pluckAlong(prev, d, 16.67 * k)) { spawnSparks(d, d.hue ?? 195, 6); continue; }
+    drops[w++] = d;
+    const a = d.life;
+    ctx.strokeStyle = d.hue === null ? `rgba(140,215,255,${0.35 * a})` : `hsla(${d.hue},100%,72%,${0.4 * a})`;
+    ctx.lineWidth = d.r;
+    ctx.beginPath(); ctx.moveTo(d.x - d.vx * 1.3, d.y - d.vy * 1.3); ctx.lineTo(d.x, d.y); ctx.stroke();
+    ctx.fillStyle = d.hue === null ? `rgba(225,246,255,${0.9 * a})` : `hsla(${d.hue},100%,88%,${0.9 * a})`;
+    ctx.beginPath(); ctx.arc(d.x, d.y, d.r * 0.8, 0, Math.PI * 2); ctx.fill();
+  }
+  drops.length = w;
+  ctx.restore();
+}
+function squirtSound(vol) {
+  if (!audio || audio.state !== "running" || muted) return;
+  const sr = audio.sampleRate, len = Math.floor(sr * 0.18);
+  const buf = audio.createBuffer(1, len, sr), data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
+  const src = audio.createBufferSource(); src.buffer = buf;
+  const bp = audio.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2200; bp.Q.value = 0.9;
+  const gain = audio.createGain(); gain.gain.value = 0.22 * vol;
+  src.connect(bp); bp.connect(gain); gain.connect(master);
+  src.start();
+}
+
+// Anillo de carga mientras sostenés la pistolita.
+function drawGunCharge(st) {
+  const c = st.gunCharge;
+  if (!st.pts || st.gun || c < 0.15) return;
+  const p = st.pts, ctr = midpoint(p[5], p[8]), r = dist(p[0], p[9]) * 0.75;
+  ctx.save();
+  ctx.lineCap = "round"; ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.beginPath(); ctx.arc(ctr.x, ctr.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "rgba(130,225,255,0.95)"; ctx.shadowColor = "rgba(130,225,255,0.9)"; ctx.shadowBlur = 10;
+  ctx.beginPath(); ctx.arc(ctr.x, ctr.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ((c - 0.15) / 0.85)); ctx.stroke();
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+function star(cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r;
+    ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+}
+// La pistola se dibuja en un sistema propio: x hacia adelante (el caño), y hacia la palma (la empuñadura),
+// en unidades de "tamaño de mano". Así se mueve, gira y escala con la mano.
+function drawWaterGun(g, now) {
+  const S = g.style;
+  const age = performance.now() - g.born;
+  const pop = age < 380 ? Math.max(0.01, easeOutBack(age / 380)) : 1;
+  const s = g.u * pop, px = 1 / s; // px = 1 píxel en unidades locales
+  ctx.save();
+  ctx.translate(g.ox, g.oy);
+  ctx.transform(g.fx, g.fy, g.vx, g.vy, 0, 0);
+  ctx.scale(s, s);
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  const lin = (x0, y0, x1, y1, c0, c1) => { const gr = ctx.createLinearGradient(x0, y0, x1, y1); gr.addColorStop(0, c0); gr.addColorStop(1, c1); return gr; };
+
+  // empuñadura
+  ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4;
+  ctx.beginPath();
+  ctx.moveTo(-0.32, 0.06); ctx.lineTo(0.14, 0.06); ctx.lineTo(0.04, 0.92);
+  ctx.quadraticCurveTo(0.02, 1.0, -0.08, 1.0); ctx.lineTo(-0.34, 0.97);
+  ctx.quadraticCurveTo(-0.44, 0.95, -0.42, 0.86); ctx.closePath();
+  ctx.fillStyle = lin(-0.42, 0, 0.14, 0, S.grip[0], S.grip[1]); ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "rgba(0,0,0,0.22)"; ctx.lineWidth = 2 * px;
+  for (const y of [0.45, 0.6, 0.75]) {
+    ctx.beginPath(); ctx.moveTo(-0.32 - 0.125 * (y - 0.06) + 0.07, y); ctx.lineTo(0.14 - 0.116 * (y - 0.06) - 0.07, y); ctx.stroke();
+  }
+  // guardamonte y gatillo
+  ctx.beginPath(); ctx.moveTo(0.12, 0.12); ctx.quadraticCurveTo(0.33, 0.62, 0.54, 0.12);
+  ctx.strokeStyle = S.grip[1]; ctx.lineWidth = 0.06; ctx.stroke();
+  ctx.save(); ctx.translate(0.27, 0.13); ctx.rotate(g.firing ? 0.5 : 0.18);
+  roundRect(-0.03, 0, 0.06, 0.24, 0.03); ctx.fillStyle = S.accent; ctx.fill(); ctx.restore();
+
+  // tanque con agua que se mueve
+  roundRect(0.02, -0.66, 0.84, 0.52, 0.16);
+  ctx.fillStyle = "rgba(200,240,255,0.25)"; ctx.fill();
+  ctx.save(); ctx.clip();
+  const level = -0.36 + Math.sin(now / 260) * 0.02;
+  ctx.beginPath(); ctx.moveTo(0, 0.1);
+  for (let x = 0; x <= 0.9; x += 0.05) ctx.lineTo(x, level + Math.sin(x * 12 + now / 170) * 0.025);
+  ctx.lineTo(0.9, 0.1); ctx.closePath();
+  ctx.fillStyle = S.rainbow ? lin(0, -0.66, 0.9, 0, "rgba(255,120,220,0.85)", "rgba(120,140,255,0.9)") : lin(0, -0.4, 0, 0, "rgba(90,200,255,0.85)", "rgba(30,120,240,0.95)");
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  for (let i = 0; i < 3; i++) {
+    const bx = 0.2 + i * 0.22, by = -0.22 - ((now / 900 + i * 0.37) % 1) * 0.12;
+    ctx.beginPath(); ctx.arc(bx, by, 0.022, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+  roundRect(0.02, -0.66, 0.84, 0.52, 0.16);
+  ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth = 1.5 * px; ctx.stroke();
+  roundRect(0.36, -0.76, 0.2, 0.12, 0.04); ctx.fillStyle = S.accent; ctx.fill();
+
+  // cuerpo y caño
+  ctx.shadowColor = "rgba(0,0,0,0.3)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  roundRect(-0.38, -0.2, 1.68, 0.36, 0.14);
+  ctx.fillStyle = lin(0, -0.2, 0, 0.16, S.body[0], S.body[1]); ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth = 1.5 * px; ctx.stroke();
+  roundRect(0.64, -0.2, 0.12, 0.36, 0.02); ctx.fillStyle = S.accent; ctx.fill();
+  if (S.rainbow) { star(0.3, -0.02, 0.09); ctx.fillStyle = S.accent; ctx.fill(); }
+  roundRect(-0.26, -0.155, 1.36, 0.05, 0.025); ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fill();
+
+  // boquilla
+  roundRect(1.28, -0.11, 0.2, 0.18, 0.05); ctx.fillStyle = S.nozzle; ctx.fill();
+  ctx.beginPath(); ctx.arc(1.5, -0.02, 0.045, 0, Math.PI * 2); ctx.fillStyle = S.accent; ctx.fill();
+  if (g.firing) {
+    ctx.globalCompositeOperation = "lighter";
+    ctx.beginPath(); ctx.arc(1.56, -0.02, 0.09, 0, Math.PI * 2);
+    ctx.fillStyle = S.rainbow ? "rgba(255,170,240,0.5)" : "rgba(170,230,255,0.5)"; ctx.fill();
+  }
+  ctx.restore();
 }
 
 // ───────────────────────── Bucle principal ─────────────────────────
@@ -723,8 +968,16 @@ function render(now, k) {
   for (const st of Object.values(hands)) {
     if (!st.pts || now - st.seen > 150) continue;
     if (showHands) drawHand(st);
-    drawCursor(st);
+    if (!st.gun) drawCursor(st);
+    drawGunCharge(st);
   }
+  for (const st of Object.values(hands)) {
+    if (!st.gun) continue;
+    if (now - st.seen > 600) { dropGun(st); continue; } // se perdió la mano
+    if (st.gun.firing) emitDrops(st.gun, k, now);
+    drawWaterGun(st.gun, now);
+  }
+  drawDrops(k);
   if (bridge) drawBridge(bridge, now);
   for (const ptr of pointers.values()) {
     if (!ptr.plucked && dist(ptr.start, ptr.cur) > 8) drawBridge({ a: ptr.start, b: ptr.cur }, now);
@@ -1095,7 +1348,7 @@ async function boot() {
 }
 
 // Solo en localhost con ?video=…: deja ver el estado desde la consola para probar sin cámara.
-if (TEST_VIDEO) window.__cuerdas = { processHands, hands, strings, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
+if (TEST_VIDEO) window.__cuerdas = { processHands, hands, strings, drops, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
 
 updateRecUI();
 updateSoundUI();

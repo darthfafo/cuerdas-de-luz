@@ -63,6 +63,17 @@ Tocá **Grabar clip**: tenés una cuenta regresiva de 3 segundos para acomodar l
 - Lleva una marca de agua chiquita con el nombre y el link.
 - Los botones no salen en el video. La barra de **Ocultar ojos** sí, así que podés compartirlo tranqui.
 
+## 🥚 Easter egg
+
+<details>
+<summary>Hay algo escondido. Abrí esto solo si te rendís.</summary>
+
+<br>
+
+Hacé una **pistolita** con la mano (índice estirado, pulgar para arriba y los otros dedos cerrados) y **sostenela quieta 2 segundos**. Aparece una pistola de agua o, si tenés suerte, una de fantasía que tira agua arcoíris. **Bajá el pulgar** para disparar: si el chorro pega en una cuerda, la hace sonar. Para guardarla, abrí la mano.
+
+</details>
+
 ## Privacidad
 
 - El video de la cámara **nunca sale de tu compu**. No hay servidor, ni cuentas, ni cookies, ni analytics.

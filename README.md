@@ -121,4 +121,8 @@ Está pensado para **Chrome o Edge en la compu**, que es donde mejor anda. Tambi
 
 Desarrollado por **[Darth Fafo](https://github.com/darthfafo)** y **Claude** (Anthropic), a puro ida y vuelta.
 
-La detección de manos y caras es de [MediaPipe](https://ai.google.dev/edge/mediapipe), de Google.
+La detección de manos y caras es de [MediaPipe](https://ai.google.dev/edge/mediapipe), de Google (licencia Apache 2.0).
+
+## Licencia
+
+[MIT](LICENSE): usalo, modificalo y compartilo como quieras, siempre que mantengas el aviso de copyright.

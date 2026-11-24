@@ -11,6 +11,13 @@
 <meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<!-- Instalable: en el celu se agrega a la pantalla de inicio y abre a pantalla completa -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cuerdas">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Cuerdas de luz">
@@ -41,7 +48,7 @@
       <svg viewBox="0 0 132 132"><circle class="track" cx="66" cy="66" r="62"/><circle class="prog" id="prog" cx="66" cy="66" r="62"/></svg>
       <span class="thumb">👍</span>
     </div>
-    <p class="msg">Hacé un pulgar arriba<br><span>con la mano derecha para empezar</span></p>
+    <p class="msg">Hacé un pulgar arriba<br><span class="only-fine">con la mano derecha para empezar</span><span class="only-coarse">con cualquier mano para empezar</span></p>
     <p id="status" class="status" role="status" aria-live="polite">Preparando…</p>
     <div id="introActions" class="actions" hidden>
       <button class="btn primary" id="retryBtn" type="button">Reintentar</button>
@@ -84,11 +91,13 @@
 <aside id="help" class="help glass" aria-label="Cómo se toca">
   <h2>Cómo se toca</h2>
   <ul>
-    <li><span class="g" aria-hidden="true">🤏🤏</span><span><b>Pinza con las dos manos</b> (pulgar + índice): aparece una cuerda entre ellas. Soltá y queda fija.</span></li>
+    <li class="only-fine"><span class="g" aria-hidden="true">🤏🤏</span><span><b>Pinza con las dos manos</b> (pulgar + índice): aparece una cuerda entre ellas. Soltá y queda fija.</span></li>
+    <li class="only-coarse"><span class="g" aria-hidden="true">🤏</span><span><b>Pinza y arrastrá</b> con una mano (o pinza con las dos): aparece una cuerda. Soltá y queda fija.</span></li>
     <li><span class="g" aria-hidden="true">☝️</span><span><b>Pasá el índice</b> a través de una cuerda para tocarla. Larga = grave, corta = aguda.</span></li>
-    <li><span class="g" aria-hidden="true">🖱️</span><span><b>Con mouse o con el dedo</b>: arrastrá para crear, pasá por encima para tocar.</span></li>
+    <li class="only-fine"><span class="g" aria-hidden="true">🖱️</span><span><b>Con el mouse</b>: arrastrá para crear, pasá por encima para tocar.</span></li>
+    <li class="only-coarse"><span class="g" aria-hidden="true">👆</span><span><b>Con el dedo en la pantalla</b>: arrastrá para crear, deslizá a través de una cuerda para tocarla.</span></li>
   </ul>
-  <p class="keys"><kbd>R</kbd> grabar · <kbd>O</kbd> ojos · <kbd>Z</kbd> deshacer · <kbd>C</kbd> limpiar · <kbd>M</kbd> sonido · <kbd>S</kbd> escala (<span id="scaleName">pentatónica</span>) · <kbd>H</kbd> manos · <kbd>V</kbd> video</p>
+  <p class="keys only-fine"><kbd>R</kbd> grabar · <kbd>O</kbd> ojos · <kbd>Z</kbd> deshacer · <kbd>C</kbd> limpiar · <kbd>M</kbd> sonido · <kbd>S</kbd> escala (<span id="scaleName">pentatónica</span>) · <kbd>H</kbd> manos · <kbd>V</kbd> video</p>
   <p class="credit">Hecho por <a href="https://github.com/darthfafo" target="_blank" rel="noopener noreferrer">Darth Fafo</a> &amp; Claude · <a href="https://github.com/darthfafo/cuerdas-de-luz" target="_blank" rel="noopener noreferrer">código</a></p>
 </aside>
 

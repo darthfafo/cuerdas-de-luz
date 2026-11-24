@@ -28,6 +28,12 @@ const MASTER_GAIN = 0.6;
 const RING_LEN = 2 * Math.PI * 62;
 const FONT = 'ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif';
 
+// Celulares y tablets (puntero táctil): menos carga, y gestos pensados para cuando una mano sostiene el teléfono.
+const IS_TOUCH = matchMedia("(pointer: coarse)").matches;
+const NUM_HANDS = IS_TOUCH ? 2 : 4;      // en el celu casi nunca hay otra persona tan cerca
+const FACE_EVERY = IS_TOUCH ? 6 : 3;     // cada cuántos cuadros se busca la cara (si no hay barra en los ojos)
+const MIN_SOLO_PX = 90;                  // largo mínimo de una cuerda hecha con una sola mano
+
 const SCALES = {
   "pentatónica": [0, 2, 4, 7, 9],
   "menor": [0, 2, 3, 5, 7, 8, 10],
@@ -67,8 +73,8 @@ let scaleIdx = 0;
 const strings = [];
 const sparks = [];
 let hueSeed = Math.random() * 360;
-let bridge = null; // cuerda que se está estirando con las dos manos
-let drag = null;   // cuerda que se está estirando con mouse o dedo
+let bridge = null;          // cuerda que se está estirando con las manos
+const pointers = new Map(); // dedos / mouse apretados: pointerId → trazo en curso
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const clamp01 = (v) => clamp(v, 0, 1);
@@ -130,6 +136,8 @@ function initAudio() {
   if (audio) return true;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return false;
+  // iPhone: que suene aunque el teléfono esté en modo silencio (Safari 16.4+)
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* sin soporte */ }
   audio = new AC();
   master = audio.createGain();
   master.gain.value = muted ? 0 : MASTER_GAIN;
@@ -303,7 +311,10 @@ async function startCamera() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      // en el celu, la resolución por defecto de la cámara frontal alcanza y gira bien con el teléfono
+      video: IS_TOUCH
+        ? { facingMode: "user", frameRate: { ideal: 30, max: 30 } }
+        : { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
     });
   } catch (e) {
     if (e.name !== "OverconstrainedError") throw e;
@@ -367,7 +378,7 @@ function loadModels() {
       catch (err) { console.warn("GPU no disponible, sigo con CPU.", err); return Task.createFromOptions(fileset, withDelegate("CPU")); }
     };
     landmarker = await create(HandLandmarker, {
-      baseOptions: { modelAssetPath: HAND_MODEL }, runningMode: "VIDEO", numHands: 4,
+      baseOptions: { modelAssetPath: HAND_MODEL }, runningMode: "VIDEO", numHands: NUM_HANDS,
       minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
     });
     // la cara es opcional (persona principal + barra en los ojos): si falla, la app sigue
@@ -406,7 +417,10 @@ function updatePerson(now) {
 }
 
 // ───────────────────────── Manos y gestos ─────────────────────────
-const newHand = () => ({ pts: null, seen: -1e9, pinching: false, pinchPos: null, pinchFrames: 0, releaseFrames: 0, prevTip: null, prevT: 0 });
+const newHand = () => ({
+  pts: null, seen: -1e9, pinching: false, pinchPos: null, pinchStart: null, soloBlocked: false,
+  pinchFrames: 0, releaseFrames: 0, prevTip: null, prevT: 0,
+});
 const hands = { L: newHand(), R: newHand() };
 
 // Se queda con dos manos como máximo, de la persona principal: una "L" y una "R".
@@ -444,7 +458,7 @@ function processHands(list, now) {
     const m = midpoint(thumb, index);
     st.pinchPos = stale || !st.pinchPos ? m : { x: st.pinchPos.x * 0.45 + m.x * 0.55, y: st.pinchPos.y * 0.45 + m.y * 0.55 };
     if (!st.pinching) {
-      if (pd < size * 0.28) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; } }
+      if (pd < size * 0.28) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; st.pinchStart = { ...st.pinchPos }; } }
       else st.pinchFrames = 0;
     } else if (pd > size * 0.45) {
       if (++st.releaseFrames >= 2) endPinch(st);
@@ -461,11 +475,24 @@ function processHands(list, now) {
     if (now - st.seen > 150) { st.prevTip = null; st.pts = null; }
   }
   // Puente: con las dos pinzas cerradas se estira una cuerda; al soltar queda fija.
+  // En el celu también vale con una sola mano: pinza, arrastrar y soltar.
   const live = (st) => st.pinching && st.pinchPos && now - st.seen < 250;
-  if (live(hands.L) && live(hands.R)) bridge = { a: { ...hands.L.pinchPos }, b: { ...hands.R.pinchPos } };
-  else if (bridge) { if (dist(bridge.a, bridge.b) > MIN_STRING_PX) addString(bridge.a, bridge.b); bridge = null; }
+  const L = hands.L, R = hands.R;
+  if (live(L) && live(R)) {
+    bridge = { a: { ...L.pinchPos }, b: { ...R.pinchPos }, two: true };
+  } else if (bridge?.two) {
+    if (dist(bridge.a, bridge.b) > MIN_STRING_PX) addString(bridge.a, bridge.b);
+    bridge = null;
+    L.soloBlocked = L.pinching; R.soloBlocked = R.pinching; // la mano que sigue cerrada no arranca otra cuerda
+  } else if (IS_TOUCH && [L, R].some((st) => live(st) && !st.soloBlocked)) {
+    const st = live(L) && !L.soloBlocked ? L : R;
+    bridge = { a: { ...st.pinchStart }, b: { ...st.pinchPos }, two: false };
+  } else if (bridge) {
+    if (dist(bridge.a, bridge.b) > MIN_SOLO_PX) addString(bridge.a, bridge.b);
+    bridge = null;
+  }
 }
-function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; }
+function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; st.soloBlocked = false; }
 
 // Pulgar arriba: pulgar estirado hacia arriba, más alto que el resto, y los otros dedos cerrados.
 function isThumbsUp(p) {
@@ -481,31 +508,44 @@ let thumbHold = 0, lastGateT = 0;
 function checkGate(list, now) {
   const dt = lastGateT ? Math.min(100, now - lastGateT) : 16;
   lastGateT = now;
-  const right = list.find((h) => h.key === "R");
-  const up = !!right && isThumbsUp(right.pts);
-  ui.ring.classList.toggle("seen", !!right);
+  // en la compu, la mano derecha; en el celu, cualquiera (la otra suele estar sosteniendo el teléfono)
+  const candidates = IS_TOUCH ? list : list.filter((h) => h.key === "R");
+  const seenHand = candidates.length > 0;
+  const up = candidates.some((h) => isThumbsUp(h.pts));
+  ui.ring.classList.toggle("seen", seenHand);
   thumbHold = up ? thumbHold + dt : Math.max(0, thumbHold - dt * 2);
   ui.prog.style.strokeDashoffset = String(RING_LEN * (1 - clamp01(thumbHold / THUMB_HOLD_MS)));
-  if (gateReady) setStatus(up ? "¡Eso! Mantenelo un toque…" : right ? "Ahora el pulgar para arriba 👍" : "Mostrale la mano derecha a la cámara");
+  if (gateReady) {
+    setStatus(up ? "¡Eso! Mantenelo un toque…" : seenHand ? "Ahora el pulgar para arriba 👍"
+      : IS_TOUCH ? "Mostrale una mano a la cámara" : "Mostrale la mano derecha a la cámara");
+  }
   if (thumbHold >= THUMB_HOLD_MS) start();
 }
 
 // ───────────────────────── Bucle principal ─────────────────────────
 let lastFrame = 0, lastVideoTime = -1, videoFrames = 0, trackErrors = 0;
+let detectCost = 0, nextDetectAt = 0;
 
 function track(now) {
-  if (!hasVideo() || video.currentTime === lastVideoTime) return;
+  if (!hasVideo() || video.currentTime === lastVideoTime || now < nextDetectAt) return;
   lastVideoTime = video.currentTime;
   videoFrames++;
   computeMap();
+  const t0 = performance.now();
   try {
-    // la cara se mira 1 de cada 3 cuadros, salvo que la barra de los ojos esté activa
-    if (faceDetector && (hideEyes || videoFrames % 3 === 0)) updatePerson(now);
+    // la cara se mira cada tantos cuadros, salvo que la barra de los ojos esté activa
+    if (faceDetector && (hideEyes || videoFrames % FACE_EVERY === 0)) updatePerson(now);
     if (landmarker) {
       const list = selectHands(landmarker.detectForVideo(video, now), now);
       if (started) processHands(list, now); else checkGate(list, now);
     }
     trackErrors = 0;
+    // Detección adaptativa: el tracking ocupa como mucho la mitad del tiempo, el resto queda para dibujar.
+    // En una compu rápida corre en cada cuadro; en un celu lento se espacia sola y la animación no se traba.
+    // Los primeros cuadros (el modelo "calentando") no cuentan, y los picos se recortan.
+    const cost = Math.min(100, performance.now() - t0);
+    if (videoFrames > 5) detectCost = detectCost ? detectCost * 0.8 + cost * 0.2 : cost;
+    nextDetectAt = now + clamp(detectCost * 2 - 4, 0, 120); // nunca menos de ~8 detecciones por segundo
   } catch (e) {
     if (++trackErrors === 1) console.error(e);
     if (trackErrors === 60) toast("El detector de manos dejó de responder.", { ms: 0, key: "track", action: { label: "Recargar", fn: () => location.reload() } });
@@ -526,7 +566,8 @@ function frame() {
 // ───────────────────────── Dibujo ─────────────────────────
 const tiny = document.createElement("canvas");
 const tctx = tiny.getContext("2d");
-const HAS_FILTER = typeof ctx.filter === "string";
+// el filtro de desenfoque del canvas es caro en celulares: ahí alcanza con achicar y agrandar
+const USE_BLUR_FILTER = typeof ctx.filter === "string" && !IS_TOUCH;
 
 // Desenfoque fuerte y barato: achicar a 48 px y volver a agrandar.
 function drawVideo(blurAmt) {
@@ -542,7 +583,7 @@ function drawVideo(blurAmt) {
     ctx.save();
     ctx.globalAlpha = blurAmt;
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-    if (HAS_FILTER) ctx.filter = "blur(18px) saturate(120%)";
+    if (USE_BLUR_FILTER) ctx.filter = "blur(18px) saturate(120%)";
     ctx.translate(W, 0); ctx.scale(-1, 1);
     ctx.drawImage(tiny, ox - 40, oy - 40, dw + 80, dh + 80);
     ctx.restore();
@@ -685,7 +726,9 @@ function render(now, k) {
     drawCursor(st);
   }
   if (bridge) drawBridge(bridge, now);
-  if (drag && !drag.plucked && dist(drag.start, drag.cur) > 8) drawBridge({ a: drag.start, b: drag.cur }, now);
+  for (const ptr of pointers.values()) {
+    if (!ptr.plucked && dist(ptr.start, ptr.cur) > 8) drawBridge({ a: ptr.start, b: ptr.cur }, now);
+  }
 }
 
 // ───────────────────────── Grabación de clips ─────────────────────────
@@ -913,8 +956,12 @@ function start({ noCamera = false } = {}) {
   ui.intro.inert = true;
   document.body.classList.add("live");
   resumeAudio();
+  keepScreenOn();
   setHelp(true, 12000);
-  if (!useCamera) toast("Modo sin cámara: arrastrá para crear cuerdas y pasá por encima para tocarlas.", { ms: 6000 });
+  if (!useCamera) {
+    toast(IS_TOUCH ? "Modo sin cámara: arrastrá el dedo para crear cuerdas y deslizalo a través de ellas para tocarlas."
+      : "Modo sin cámara: arrastrá para crear cuerdas y pasá por encima para tocarlas.", { ms: 6000 });
+  }
 }
 
 ui.retry.addEventListener("click", boot);
@@ -928,7 +975,8 @@ ui.sound.addEventListener("click", toggleMute);
 ui.helpBtn.addEventListener("click", () => setHelp(!ui.help.classList.contains("show")));
 if (!CAN_RECORD) ui.rec.hidden = true;
 
-addEventListener("pointerdown", resumeAudio, { passive: true });
+// el audio solo puede arrancar después de un toque o una tecla (en iPhone, el toque cuenta al levantar el dedo)
+for (const type of ["pointerdown", "touchend", "click"]) addEventListener(type, resumeAudio, { passive: true });
 addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return; // no pisar Cmd+C, Ctrl+Z, etc.
   resumeAudio();
@@ -950,41 +998,63 @@ addEventListener("keydown", (e) => {
   }
 });
 
-// Mouse: arrastrar crea, pasar por encima toca. Touch/lápiz: arrastrar crea, salvo que el trazo toque una cuerda.
-let lastPointer = null, lastPointerT = 0;
+// Mouse: arrastrar crea, pasar por encima toca.
+// Dedo / lápiz (multitouch): arrastrar crea, salvo que el trazo cruce una cuerda: en ese caso la toca.
+let hover = null, hoverT = 0;
 const pointerPos = (e) => ({ x: e.clientX, y: e.clientY });
+const haptic = () => {
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+  try { navigator.vibrate?.(8); } catch { /* sin vibración */ }
+};
 canvas.addEventListener("pointerdown", (e) => {
   if (!started || e.button !== 0) return;
-  canvas.setPointerCapture?.(e.pointerId);
+  if (ui.help.classList.contains("show")) setHelp(false); // tocar el lienzo cierra la ayuda
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* sin captura: el gesto sigue igual */ }
   const p = pointerPos(e);
-  drag = { id: e.pointerId, start: p, cur: p, plucked: false, mouse: e.pointerType === "mouse" };
-  lastPointer = p; lastPointerT = e.timeStamp;
+  pointers.set(e.pointerId, { start: p, cur: p, last: p, lastT: e.timeStamp, plucked: false, mouse: e.pointerType === "mouse" });
 });
 canvas.addEventListener("pointermove", (e) => {
-  if (!started || (drag && e.pointerId !== drag.id)) return;
+  if (!started) return;
   const p = pointerPos(e);
-  const canPluck = drag ? !drag.mouse : e.pointerType === "mouse";
-  if (lastPointer && canPluck && pluckAlong(lastPointer, p, e.timeStamp - lastPointerT) && drag) drag.plucked = true;
-  if (drag) drag.cur = p;
-  lastPointer = p; lastPointerT = e.timeStamp;
+  const ptr = pointers.get(e.pointerId);
+  if (ptr) {
+    if (!ptr.mouse && pluckAlong(ptr.last, p, e.timeStamp - ptr.lastT)) { ptr.plucked = true; haptic(); }
+    ptr.cur = p; ptr.last = p; ptr.lastT = e.timeStamp;
+  } else if (e.pointerType === "mouse") {
+    if (hover) pluckAlong(hover, p, e.timeStamp - hoverT);
+    hover = p; hoverT = e.timeStamp;
+  }
 });
-canvas.addEventListener("pointerup", (e) => {
-  if (!drag || e.pointerId !== drag.id) return;
+function endPointer(e) {
+  const ptr = pointers.get(e.pointerId);
+  if (!ptr) return;
+  pointers.delete(e.pointerId);
   const p = pointerPos(e);
-  if (!drag.plucked && dist(drag.start, p) > MIN_STRING_PX) addString(drag.start, p);
-  drag = null;
-  if (e.pointerType !== "mouse") lastPointer = null;
-});
-canvas.addEventListener("pointercancel", () => { drag = null; lastPointer = null; });
-canvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse" && !drag) lastPointer = null; });
+  if (e.type === "pointerup" && !ptr.plucked && dist(ptr.start, p) > MIN_STRING_PX) addString(ptr.start, p);
+  if (ptr.mouse) { hover = p; hoverT = e.timeStamp; }
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse" && !pointers.has(e.pointerId)) hover = null; });
+
+// Que la pantalla no se apague mientras tocás con las manos (sin tocar la pantalla).
+let wakeLock = null;
+async function keepScreenOn() {
+  if (!started || document.hidden || wakeLock || !("wakeLock" in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
+  } catch { /* sin soporte o sin permiso: no pasa nada */ }
+}
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     // en segundo plano el lienzo no se dibuja: cortamos la grabación para no guardar un clip congelado
     if (recState === "countdown") toggleRecording();
     else if (recState === "recording") stopRecording();
-  } else if (useCamera && video.paused && (video.srcObject || video.getAttribute("src"))) {
-    video.play().catch(() => {});
+  } else {
+    if (useCamera && video.paused && (video.srcObject || video.getAttribute("src"))) video.play().catch(() => {});
+    keepScreenOn();
   }
 });
 
@@ -1010,7 +1080,7 @@ async function boot() {
       showIntroError(cameraErrorMessage(e), !["InsecureContextError", "UnsupportedError"].includes(e?.name));
       return;
     }
-    setStatus("Cargando el detector de manos…");
+    setStatus("Cargando el detector de manos (unos 15 MB la primera vez)…");
     try { await models; }
     catch (e) {
       console.error(e);
@@ -1023,6 +1093,9 @@ async function boot() {
     booting = false;
   }
 }
+
+// Solo en localhost con ?video=…: deja ver el estado desde la consola para probar sin cámara.
+if (TEST_VIDEO) window.__cuerdas = { processHands, hands, strings, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
 
 updateRecUI();
 updateSoundUI();

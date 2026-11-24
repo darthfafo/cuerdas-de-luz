@@ -27,6 +27,8 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none; user-select: none; /* arrastrar no selecciona texto */
+  overscroll-behavior: none;   /* sin "tirar para recargar" en el celu */
+  touch-action: manipulation;  /* sin zoom por doble toque */
 }
 
 #stage {
@@ -35,7 +37,9 @@ html, body {
   touch-action: none; /* evita scroll/zoom mientras dibujás con el dedo */
   cursor: crosshair;
 }
-#video { display: none; } /* la cámara se dibuja en el lienzo */
+/* La cámara se dibuja en el lienzo. El <video> queda invisible pero no con display:none,
+   porque Safari en iPhone puede dejar de actualizar los cuadros de un video oculto así. */
+#video { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 button { font: inherit; color: inherit; }
 a { color: inherit; }
 :focus-visible { outline: 2px solid #9ff; outline-offset: 2px; }
@@ -80,7 +84,10 @@ kbd {
   font-size: 13px; color: var(--muted);
 }
 .link:hover { color: var(--text); }
-@media (hover: none) { .link kbd { display: none; } }
+
+/* Textos distintos para pantalla táctil (celu, tablet) y para mouse */
+@media (pointer: coarse) { .only-fine, .link kbd { display: none !important; } }
+@media not all and (pointer: coarse) { .only-coarse { display: none !important; } }
 
 /* ───────── Inicio ───────── */
 .intro {
@@ -182,7 +189,7 @@ body.live .controls .btn { pointer-events: auto; }
 .toast {
   position: fixed; z-index: 9; left: 50%; bottom: calc(20px + var(--safe-b));
   display: flex; align-items: center; gap: 12px;
-  max-width: calc(100vw - 32px); padding: 10px 12px 10px 16px; border-radius: 16px;
+  width: max-content; max-width: calc(100vw - 32px); padding: 10px 12px 10px 16px; border-radius: 16px;
   font-size: 13px; line-height: 1.4;
   opacity: 0; transform: translate(-50%, 10px); pointer-events: none;
   transition: opacity .25s, transform .25s;
@@ -216,14 +223,15 @@ body.live .controls .btn { pointer-events: auto; }
 .noscript { position: fixed; inset: 0; display: grid; place-items: center; margin: 0; padding: 24px; text-align: center; }
 
 /* ───────── Pantallas chicas ───────── */
-@media (hover: none) { .help .keys { display: none; } } /* sin teclado físico no hacen falta los atajos */
-
 @media (max-width: 760px) {
-  .controls { gap: 6px; }
+  .controls { gap: 6px; left: calc(12px + var(--safe-l)); right: calc(12px + var(--safe-r)); }
   .controls .label { display: none; }
-  .controls .btn { width: 38px; padding: 0; }
+  .controls .btn { width: 40px; height: 40px; padding: 0; }
   .controls .btn.rec { width: auto; padding: 0 12px; }
   .controls .btn.rec .label { display: inline; }
+  /* los avisos van arriba, debajo de los botones, para no tapar la ayuda ni las manos */
+  .toast { top: calc(66px + var(--safe-t)); bottom: auto; transform: translate(-50%, -10px); }
+  .toast.show { transform: translate(-50%, 0); }
   .card { padding: 28px 22px 20px; gap: 14px; }
 }
 

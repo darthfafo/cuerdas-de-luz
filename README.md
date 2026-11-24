@@ -33,6 +33,15 @@ No se instala nada, no hay que crear cuenta y no hay servidor: todo pasa en tu n
 
 > ¿El 👍 no te sale? Tocá **Empezar sin gesto** o apretá `Enter`. ¿No tenés cámara? Está **Usar sin cámara**.
 
+### En el celu
+
+- **Alcanza con una mano**, porque la otra suele estar sosteniendo el teléfono: hacé la pinza, arrastrá y soltá. Si lo apoyás en algún lado, también funciona con las dos.
+- El 👍 vale **con cualquier mano**.
+- **Con el dedo en la pantalla**: arrastrá para crear una cuerda y deslizá a través de ella para tocarla. Anda con varios dedos a la vez y, en Android, vibra cuando tocás.
+- **Suena aunque el iPhone esté en silencio** (Safari 16.4 o más nuevo).
+- La pantalla **no se apaga** mientras tocás en el aire.
+- **Instalala como app**: en el menú del navegador elegí *Agregar a pantalla de inicio* y se abre a pantalla completa, con su ícono.
+
 ### Botones y teclas
 
 | Botón | Tecla | Qué hace |
@@ -77,7 +86,7 @@ flowchart LR
   snd --> rec
 ```
 
-**1. Ver las manos.** [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) encuentra 21 puntos en cada mano, unas 30 veces por segundo. Corre en la placa de video (WebGL + WebAssembly) y, si no puede, en el procesador.
+**1. Ver las manos.** [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) encuentra 21 puntos en cada mano, unas 30 veces por segundo. Corre en la placa de video (WebGL + WebAssembly) y, si no puede, en el procesador. Además mide cuánto tarda cada detección y se adapta: en una compu rápida analiza todos los cuadros, y en un celu más lento los espacia para que el tracking nunca use más de la mitad del tiempo y la animación siga fluida.
 
 **2. Quedarse con una sola persona.** Busca hasta 4 manos pero usa dos: las de la persona con la cara más grande, o sea la que está más cerca de la cámara. Descarta las manos lejanas o de gente que pasa por atrás, y asigna una a la izquierda y otra a la derecha para que cada mano mantenga su lugar.
 
@@ -107,15 +116,16 @@ Después abrí <http://localhost:8766>. La cámara solo anda en `localhost` o co
 > **Para desarrollar sin webcam:** en localhost podés usar un video en lugar de la cámara con `http://localhost:8766/?video=mi-clip.mp4`.
 
 ```
-index.html   la página, los metadatos y la Content Security Policy
-style.css    estilos
-app.js       todo lo demás: tracking, gestos, física, sonido y grabación
-assets/      ícono e imagen para compartir en redes
+index.html             la página, los metadatos y la Content Security Policy
+style.css              estilos
+app.js                 todo lo demás: tracking, gestos, física, sonido y grabación
+manifest.webmanifest   para instalarla como app en el celu
+assets/                íconos e imagen para compartir en redes
 ```
 
 ## Navegadores
 
-Está pensado para **Chrome o Edge en la compu**, que es donde mejor anda. También debería andar en Safari y Firefox recientes (en Firefox los clips salen en WebM). En el celu funciona, pero el tracking le pide bastante al procesador.
+Anda mejor en **Chrome o Edge en la compu**. También debería andar en Safari y Firefox recientes (en Firefox los clips salen en WebM). En el celu funciona en Chrome (Android) y Safari (iPhone): baja un poco la carga del tracking y se adapta a la potencia del teléfono, pero en equipos viejos puede ir más lento.
 
 ## Créditos
 

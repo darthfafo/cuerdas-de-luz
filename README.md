@@ -26,7 +26,7 @@ No se instala nada, no hay que crear cuenta y no hay servidor: todo pasa en tu n
 | Gesto | Qué hace |
 |---|---|
 | 👍 Pulgar arriba con la mano **derecha** | Arranca. Hasta que lo hacés, la cámara se ve desenfocada |
-| 🤏 🤏 Pinza (pulgar + índice) con **las dos manos** | Aparece una cuerda entre las dos pinzas. Estirala como quieras |
+| 🤏🤏 **Juntar las dos pinzas** (pulgar + índice de cada mano) **1 segundo** | Se carga un anillo y nace una cuerda en ese punto. Separá las manos para estirarla |
 | ✋ Soltar cualquiera de las dos pinzas | La cuerda queda fija en el aire |
 | ☝️ Pasar el índice a través de una cuerda, **a su misma distancia de la cámara** | La tocás. Más rápido, más fuerte; más lejos, más bajito |
 | ✊ ✊ Los dos puños cerrados 2 segundos | Se borran todas las cuerdas (un anillo te muestra la carga) |
@@ -46,7 +46,7 @@ Cada cuerda vive a una distancia real de la cámara. Si estirás una con una man
 
 ### En el celu
 
-- **Alcanza con una mano**, porque la otra suele estar sosteniendo el teléfono: hacé la pinza, arrastrá y soltá. Si lo apoyás en algún lado, también funciona con las dos.
+- **Alcanza con una mano**, porque la otra suele estar sosteniendo el teléfono: hacé la pinza, dejala quieta 1 segundo hasta que se cargue el anillo, arrastrá y soltá. Si lo apoyás en algún lado, también funciona con las dos.
 - El 👍 vale **con cualquier mano**.
 - **Con el dedo en la pantalla**: arrastrá para crear una cuerda y deslizá a través de ella para tocarla. Anda con varios dedos a la vez y, en Android, vibra cuando tocás.
 - **Suena aunque el iPhone esté en silencio** (Safari 16.4 o más nuevo).
@@ -149,6 +149,7 @@ flowchart LR
 
 **3. Entender los gestos.**
 - *Pinza*: compara la distancia entre pulgar e índice con el tamaño de la mano, así funciona igual cerca o lejos de la cámara. Se cierra al 28 % y se abre recién al 45 % (histéresis), para que no titile.
+- *Crear una cuerda*: las dos pinzas tienen que tocarse y sostenerse 1 segundo, así no aparecen cuerdas sin querer. Si se pierde una mano de vista mientras estirás, se la espera un momento y, si no vuelve, la cuerda se cancela.
 - *Pulgar arriba*: el pulgar tiene que estar estirado, apuntando para arriba y más alto que los otros dedos, que tienen que estar cerrados. Hay que sostenerlo poco más de medio segundo.
 - *Tocar*: entre un cuadro y el siguiente, la punta del índice traza un segmento. Si ese segmento cruza una cuerda, la tocaste. La velocidad del dedo define la fuerza.
 

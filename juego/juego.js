@@ -8,10 +8,10 @@
  * Cámara → MediaPipe (puntos 3D de la mano) → hacia dónde apunta el caño → mira en la pantalla
  * Blancos y pistola en 3D con three.js, efectos de agua en un lienzo 2D, sonidos sintetizados con Web Audio.
  */
-import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "../lib/camera.js?v=20261124b";
-import { loadVision } from "../lib/vision.js?v=20261124b";
-import { clamp, clamp01, dist, isGunShape, isThumbCocked, isGripShape, indexBend, handPose3D } from "../lib/gestures.js?v=20261124b";
-import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun, starShape } from "../lib/gun3d.js?v=20261124b";
+import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "../lib/camera.js?v=20261124e";
+import { loadVision } from "../lib/vision.js?v=20261124e";
+import { clamp, clamp01, dist, isGunShape, isThumbCocked, isGripShape, indexBend, handPose3D, dedupeHands } from "../lib/gestures.js?v=20261124e";
+import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun, starShape } from "../lib/gun3d.js?v=20261124e";
 
 // ───────────────────────── Configuración ─────────────────────────
 const GAME_SECONDS = 60;
@@ -488,7 +488,7 @@ function selectHands(result) {
     const world = result.worldLandmarks?.[i]?.map((w) => ({ x: -w.x, y: w.y, z: w.z })) || null;
     return { pts, world, size: dist(pts[0], pts[9]), key: result.handedness?.[i]?.[0]?.categoryName === "Left" ? "L" : "R" };
   });
-  list = list.sort((a, b) => b.size - a.size).slice(0, 2);
+  list = dedupeHands(list.sort((a, b) => b.size - a.size)).slice(0, 2);
   if (list.length === 2 && list[0].key === list[1].key) {
     const [r, l] = list[0].pts[0].x > list[1].pts[0].x ? list : [list[1], list[0]];
     r.key = "R"; l.key = "L";

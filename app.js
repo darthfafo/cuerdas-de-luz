@@ -7,14 +7,14 @@
  * Todo corre en el navegador: ningún cuadro de la cámara sale del dispositivo.
  */
 
-import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "./lib/camera.js?v=20261124b";
-import { loadVision } from "./lib/vision.js?v=20261124b";
+import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "./lib/camera.js?v=20261124e";
+import { loadVision } from "./lib/vision.js?v=20261124e";
 import {
   clamp, clamp01, dist, midpoint, palmCenter, isThumbsUp, isGunShape, isThumbCocked, isGripShape, isFist, indexBend, handPose3D,
-  sub3, nrm3, cross3,
-} from "./lib/gestures.js?v=20261124b";
-import { createSpace, Z_DEFAULT, add3, lerp3, dist3, screenToU, handSilhouette } from "./lib/space.js?v=20261124b";
-import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun } from "./lib/gun3d.js?v=20261124b";
+  sub3, nrm3, cross3, dedupeHands,
+} from "./lib/gestures.js?v=20261124e";
+import { createSpace, Z_DEFAULT, add3, lerp3, dist3, screenToU, handSilhouette } from "./lib/space.js?v=20261124e";
+import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun } from "./lib/gun3d.js?v=20261124e";
 
 // ───────────────────────── Configuración ─────────────────────────
 const SITE_URL = "https://darthfafo.github.io/cuerdas-de-luz/";
@@ -36,7 +36,10 @@ const FONT = 'ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif';
 // Celulares y tablets (IS_TOUCH): menos carga, y gestos pensados para cuando una mano sostiene el teléfono.
 const NUM_HANDS = IS_TOUCH ? 2 : 4;      // en el celu casi nunca hay otra persona tan cerca
 const FACE_EVERY = IS_TOUCH ? 6 : 3;     // cada cuántos cuadros se busca la cara (si no hay barra en los ojos)
-const MIN_M = 0.07, MIN_SOLO_M = 0.09;   // largo mínimo (metros) de una cuerda hecha con dos manos / con una
+const CONTACT_MS = 1000;                 // cuánto hay que sostener el contacto para que nazca una cuerda
+const CONTACT_M = 0.065;                 // a menos de esto (metros) las dos pinzas se están tocando
+const LOST_PINCH_MS = 700;               // si se pierde una mano mientras estirás, cuánto se la espera
+const MIN_SOLO_M = 0.09;                 // largo mínimo de una cuerda hecha con una sola mano
 
 const SCALES = {
   "pentatónica": [0, 2, 4, 7, 9],
@@ -372,7 +375,7 @@ function updatePerson(now) {
 
 // ───────────────────────── Manos y gestos ─────────────────────────
 const newHand = () => ({
-  pts: null, seen: -1e9, pinching: false, pinchPos: null, pinchStart: null, soloBlocked: false,
+  pts: null, seen: -1e9, pinching: false, pinchPos: null, pinchStart: null, pinchSince: 0,
   pinchFrames: 0, releaseFrames: 0, prevTip: null, prevT: 0,
   z: Z_DEFAULT, measured: false, p3: null, // profundidad (metros) y los 21 puntos en 3D
   gun: null, gunHoldStart: 0, gunHoldAt: null, gunCharge: 0, // easter egg
@@ -392,7 +395,7 @@ function selectHands(result, now) {
     list = list.filter((h) => Math.abs(h.pts[0].x - person.cx) < person.w * 4 && h.pts[0].y > person.cy - person.w * 3);
   }
   const maxSize = Math.max(0, ...list.map((h) => h.size));
-  list = list.filter((h) => h.size >= maxSize * 0.45).sort((a, b) => b.size - a.size).slice(0, 2);
+  list = dedupeHands(list.filter((h) => h.size >= maxSize * 0.45).sort((a, b) => b.size - a.size)).slice(0, 2);
   if (list.length === 2 && list[0].key === list[1].key) {
     // misma etiqueta dos veces → decide la posición (vista espejada: la derecha a la derecha)
     const [r, l] = list[0].pts[0].x > list[1].pts[0].x ? list : [list[1], list[0]];
@@ -412,6 +415,7 @@ function measureDepth(st, pts, world, stale) {
 const pinch3 = (p) => space.unproject(p.x, p.y, p.z);
 
 function processHands(list, now) {
+  keepIdentity(list, now);
   const seen = new Set();
   for (const { key, pts, world } of list) {
     seen.add(key);
@@ -433,7 +437,7 @@ function processHands(list, now) {
     st.pinchPos = stale || !st.pinchPos ? m
       : { x: st.pinchPos.x * 0.45 + m.x * 0.55, y: st.pinchPos.y * 0.45 + m.y * 0.55, z: st.pinchPos.z * 0.6 + m.z * 0.4 };
     if (!st.pinching) {
-      if (pd < size * 0.28 && fistCharge <= 0.15) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; st.pinchStart = { ...st.pinchPos }; } }
+      if (pd < size * 0.28 && fistCharge <= 0.15) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; st.pinchStart = { ...st.pinchPos }; st.pinchSince = now; } }
       else st.pinchFrames = 0;
     } else if (pd > size * 0.45) {
       if (++st.releaseFrames >= 2) endPinch(st);
@@ -447,33 +451,116 @@ function processHands(list, now) {
   for (const key of ["L", "R"]) {
     if (seen.has(key)) continue;
     const st = hands[key];
-    if (st.pinching && now - st.seen > 250) endPinch(st);
+    if (st.pinching && now - st.seen > (making ? LOST_PINCH_MS : 250)) endPinch(st);
     if (now - st.seen > 150) { st.prevTip = null; st.pts = null; st.gunHoldStart = 0; st.gunCharge = 0; st.fist = false; }
     if (st.gun && now - st.seen > 400) dropGun(st);
   }
-  // Puente: con las dos pinzas cerradas se estira una cuerda; al soltar queda fija.
-  // En el celu también vale con una sola mano: pinza, arrastrar y soltar.
-  const live = (st) => st.pinching && st.pinchPos && now - st.seen < 250;
-  const L = hands.L, R = hands.R;
   checkFists(now);
   if (fistCharge > 0.15) { // cerrar los dos puños no deja una cuerda por accidente
-    bridge = null;
-    for (const st of [L, R]) if (st.pinching) endPinch(st);
+    cancelMaking();
+    for (const st of [hands.L, hands.R]) if (st.pinching) endPinch(st);
+  } else updateMaking(now);
+}
+
+// Con las manos juntas, MediaPipe a veces confunde cuál es cuál: manda la continuidad de la posición.
+function keepIdentity(list, now) {
+  const fresh = (k) => hands[k].wrist && now - hands[k].seen < 400;
+  const cost = (h, k) => dist(h.pts[0], hands[k].wrist);
+  const other = { L: "R", R: "L" };
+  if (list.length === 2 && fresh("L") && fresh("R")) {
+    const [a, b] = list;
+    if (cost(a, other[a.key]) + cost(b, other[b.key]) < 0.6 * (cost(a, a.key) + cost(b, b.key))) { a.key = other[a.key]; b.key = other[b.key]; }
+  } else if (list.length === 1 && fresh(other[list[0].key])) {
+    const [a] = list, o = other[a.key], size = dist(a.pts[0], a.pts[9]);
+    if (cost(a, o) < size * 0.6 && (!fresh(a.key) || cost(a, a.key) > size * 1.5)) a.key = o;
   }
-  if (live(L) && live(R)) {
-    bridge = { a: pinch3(L.pinchPos), b: pinch3(R.pinchPos), two: true };
-  } else if (bridge?.two) {
-    if (dist3(bridge.a, bridge.b) > MIN_M) addString(bridge.a, bridge.b);
-    bridge = null;
-    L.soloBlocked = L.pinching; R.soloBlocked = R.pinching; // la mano que sigue cerrada no arranca otra cuerda
-  } else if (IS_TOUCH && [L, R].some((st) => live(st) && !st.soloBlocked)) {
-    const st = live(L) && !L.soloBlocked ? L : R;
-    bridge = { a: pinch3(st.pinchStart), b: pinch3(st.pinchPos), two: false };
-  } else if (bridge) {
-    if (dist3(bridge.a, bridge.b) > MIN_SOLO_M) addString(bridge.a, bridge.b);
-    bridge = null;
+  for (const h of list) hands[h.key].wrist = h.pts[0];
+}
+
+// ── Crear cuerdas ──
+// Para que no aparezcan sin querer, hace falta un punto de contacto sostenido 1 segundo:
+//   con las dos manos, las dos pinzas tocándose; en el celu, también una sola pinza quieta.
+// Recién ahí la cuerda nace y se puede estirar. Queda fija al abrir una pinza (perder una mano de vista no la crea).
+let contact = null; // { since, last, charge, p }: contacto en curso
+let making = null;  // { solo, key, start, last }: cuerda ya nacida, estirándose
+let apartHint = null;
+function cancelMaking() { making = null; contact = null; bridge = null; apartHint = null; }
+
+function updateMaking(now) {
+  const L = hands.L, R = hands.R;
+  const live = (st) => st.pinching && st.pinchPos && !st.gun && now - st.seen < 250;
+  const opened = (st) => !st.pinching && now - st.seen < 60; // la estamos viendo, y abierta
+  const both = live(L) && live(R);
+  apartHint = null;
+
+  if (making) {
+    if (making.solo) {
+      const st = hands[making.key];
+      if (live(st)) { making.last = now; bridge = { a: making.start, b: pinch3(st.pinchPos) }; }
+      else if (opened(st)) finishMaking(bridge && dist3(bridge.a, bridge.b) > MIN_SOLO_M);
+      else if (now - making.last > LOST_PINCH_MS) cancelMaking();
+      return;
+    }
+    if (both) { making.last = now; bridge = { a: pinch3(L.pinchPos), b: pinch3(R.pinchPos) }; }
+    else if (opened(L) || opened(R)) finishMaking(bridge && isStretched(bridge.a, bridge.b));
+    else if (now - making.last > LOST_PINCH_MS) cancelMaking();
+    return;
+  }
+
+  // ¿hay un punto de contacto?
+  let p = null, solo = null;
+  if (both) {
+    const a = pinch3(L.pinchPos), b = pinch3(R.pinchPos);
+    if (Math.hypot(a.x - b.x, a.y - b.y) < CONTACT_M && Math.abs(a.z - b.z) < 0.25) p = lerp3(a, b, 0.5);
+    else if (now - Math.max(L.pinchSince, R.pinchSince) > 500) apartHint = midpoint(L.pinchPos, R.pinchPos);
+  } else if (IS_TOUCH) {
+    solo = live(L) && !handInView(R, now) ? "L" : live(R) && !handInView(L, now) ? "R" : null;
+    if (solo) {
+      const st = hands[solo], a = pinch3(st.pinchPos), s = pinch3(st.pinchStart);
+      if (Math.hypot(a.x - s.x, a.y - s.y) > 0.035) st.pinchStart = { ...st.pinchPos }; // se movió: el segundo empieza de nuevo
+      else p = a;
+      if (!p) contact = null;
+    }
+  }
+  if (p) {
+    if (!contact || contact.solo !== solo) contact = { since: now, solo };
+    contact.last = now; contact.p = p;
+    contact.charge = clamp01((now - contact.since) / CONTACT_MS);
+    if (contact.charge >= 1) {
+      making = { solo: !!solo, key: solo, start: p, last: now };
+      contact = null;
+      const q = space.project(p);
+      spawnSparks(q, (hueSeed + 47) % 360, 26);
+      pluckSound(quantize(880), 0.35, (q.x / W) * 2 - 1, 0.3);
+      haptic();
+    }
+  } else if (contact && now - contact.last > 300) contact = null; // aguanta parpadeos del tracking
+}
+const handInView = (st, now) => st.pts && now - st.seen < 250;
+// La profundidad tiene ruido: de costado alcanza con separarlas; si solo se alejan en profundidad, hace falta más.
+const isStretched = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) > CONTACT_M * 1.25 || Math.abs(a.z - b.z) > 0.2;
+function finishMaking(ok) {
+  if (ok) addString(bridge.a, bridge.b);
+  cancelMaking();
+}
+function drawContact(now) {
+  if (contact && contact.charge > 0.05) {
+    const p = space.project(contact.p), r = 26, hue = (hueSeed + 47) % 360;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = `hsla(${hue},100%,80%,0.95)`; ctx.shadowColor = `hsl(${hue},100%,70%)`; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * contact.charge); ctx.stroke();
+    ctx.restore();
+  } else if (apartHint && !contact && !making) {
+    ctx.save();
+    ctx.font = `600 12px ${FONT}`; ctx.textAlign = "center"; ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = 6;
+    ctx.fillStyle = "rgba(255,255,255,.7)";
+    ctx.fillText("juntá las pinzas 1 segundo", apartHint.x, apartHint.y);
+    ctx.restore();
   }
 }
+
 // Dos puños cerrados durante 2 segundos: se borran todas las cuerdas.
 const FIST_HOLD_MS = 2000;
 let fistStart = 0, fistLast = 0, fistCharge = 0, fistDone = false;
@@ -507,7 +594,7 @@ function drawFistCharge() {
     ctx.restore();
   }
 }
-function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; st.soloBlocked = false; }
+function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; }
 
 // Pulgar arriba (isThumbsUp, en lib/gestures.js), sostenido un instante, arranca la app.
 let thumbHold = 0, lastGateT = 0;
@@ -1154,6 +1241,7 @@ function render(now, k) {
   }
   if (depthHelp && inView === 0) drawDepthHelp(depthHelp);
   drawFistCharge();
+  if (inView === 0) drawContact(now);
   for (const st of Object.values(hands)) {
     const g = st.gun;
     if (!g) continue;
@@ -1557,7 +1645,7 @@ async function boot() {
 }
 
 // Solo en localhost con ?video=…: deja ver el estado desde la consola para probar sin cámara.
-if (TEST_VIDEO) window.__cuerdas = { space, addString, pluckAlong, processHands, hands, strings, drops, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
+if (TEST_VIDEO) window.__cuerdas = { getMaking: () => making, getContact: () => contact, keepIdentity, space, addString, pluckAlong, processHands, hands, strings, drops, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
 
 updateRecUI();
 updateSoundUI();

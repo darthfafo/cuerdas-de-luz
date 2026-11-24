@@ -235,6 +235,13 @@ body.live .controls .btn { pointer-events: auto; }
   .card { padding: 28px 22px 20px; gap: 14px; }
 }
 
+/* En teléfonos angostos, "Grabar" es solo el punto rojo; al grabar muestra el tiempo y esconde la vista 3D */
+@media (max-width: 420px) {
+  .controls .btn.rec:not(.recording):not(.arming) { width: 40px; padding: 0; }
+  .controls .btn.rec:not(.recording):not(.arming) .label { display: none; }
+  .controls:has(.rec.recording) #viewBtn, .controls:has(.rec.arming) #viewBtn { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }

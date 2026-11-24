@@ -28,11 +28,21 @@ No se instala nada, no hay que crear cuenta y no hay servidor: todo pasa en tu n
 | 👍 Pulgar arriba con la mano **derecha** | Arranca. Hasta que lo hacés, la cámara se ve desenfocada |
 | 🤏 🤏 Pinza (pulgar + índice) con **las dos manos** | Aparece una cuerda entre las dos pinzas. Estirala como quieras |
 | ✋ Soltar cualquiera de las dos pinzas | La cuerda queda fija en el aire |
-| ☝️ Pasar el índice a través de una cuerda | La tocás. Más rápido, más fuerte |
+| ☝️ Pasar el índice a través de una cuerda, **a su misma distancia de la cámara** | La tocás. Más rápido, más fuerte; más lejos, más bajito |
 | ✊ ✊ Los dos puños cerrados 2 segundos | Se borran todas las cuerdas (un anillo te muestra la carga) |
 | 🖱️ Arrastrar / pasar por encima | Lo mismo con el mouse, o con el dedo en el celu |
 
 > ¿El 👍 no te sale? Tocá **Empezar sin gesto** o apretá `Enter`. ¿No tenés cámara? Está **Usar sin cámara**.
+
+### El espacio es 3D
+
+Cada cuerda vive a una distancia real de la cámara. Si estirás una con una mano cerca y la otra lejos, queda inclinada hacia el fondo.
+
+- **Lo cercano** se ve grueso y brillante; **lo lejano**, fino y tenue. Las marcas de la regla son cada 2 cm de verdad, así que se juntan a lo lejos.
+- **El largo real define la nota**, también el largo que se va hacia el fondo.
+- **Tu mano tapa** las cuerdas que le quedan atrás.
+- Para tocar una cuerda hay que estar a su profundidad, con unos 12 cm de margen. Si el dedo pasa por delante o por detrás, un cartel te dice cuánto acercarlo o alejarlo.
+- Con el mouse o el dedo se trabaja siempre a 60 cm.
 
 ### En el celu
 
@@ -49,6 +59,8 @@ No se instala nada, no hay que crear cuenta y no hay servidor: todo pasa en tu n
 |---|:---:|---|
 | ● Grabar clip | `R` | Graba 20 segundos con imagen y sonido |
 | Ocultar ojos | `O` | Te pone una barra negra sobre los ojos (también sale en el clip) |
+| Vista 3D | `D` | Muestra el espacio desde otro ángulo (arrastrá para girarlo) |
+| | `P` | Prende y apaga la profundidad (apagada, se toca desde cualquier distancia) |
 | Deshacer | `Z` | Borra la última cuerda |
 | Limpiar | `C` | Borra todas las cuerdas |
 | 🔊 | `M` | Prende y apaga el sonido |
@@ -140,11 +152,13 @@ flowchart LR
 - *Pulgar arriba*: el pulgar tiene que estar estirado, apuntando para arriba y más alto que los otros dedos, que tienen que estar cerrados. Hay que sostenerlo poco más de medio segundo.
 - *Tocar*: entre un cuadro y el siguiente, la punta del índice traza un segmento. Si ese segmento cruza una cuerda, la tocaste. La velocidad del dedo define la fuerza.
 
-**4. La cuerda vibra de verdad (bueno, casi).** Cada cuerda es la suma de sus primeros 6 modos de vibración (los armónicos), cada uno con su frecuencia y su amortiguación. El punto donde la tocás define qué armónicos se excitan, como en una guitarra: cerca de la punta suena más brillante y en el medio más redondo.
+**4. Medir la profundidad con una sola cámara.** Una mano se ve más grande cuanto más cerca está, pero medir solo su tamaño engaña: si la inclinás, se achica sin alejarse. Por eso se buscan los píxeles por metro que mejor hacen coincidir los 21 puntos en pantalla con los 21 puntos 3D que da MediaPipe. Sobre un video de prueba, los saltos de la medida (percentil 95) bajaron del 30 % al 14 %, y después se suaviza. La distancia es aproximada, porque supone una cámara web común y una mano promedio, pero el espacio es coherente: alcanza para estirar y tocar.
 
-**5. El sonido.** Síntesis [Karplus-Strong](https://es.wikipedia.org/wiki/Algoritmo_de_Karplus-Strong): un buffer cortito de ruido que se recircula promediándose consigo mismo. Ese promedio funciona como un filtro, y lo que queda suena a cuerda pulsada. El largo del buffer define la nota (cuerda larga = nota grave), que se ajusta a la escala elegida y pasa por un eco suave y un compresor.
+**5. La cuerda vibra de verdad (bueno, casi).** Cada cuerda es la suma de sus primeros 6 modos de vibración (los armónicos), cada uno con su frecuencia y su amortiguación. El punto donde la tocás define qué armónicos se excitan, como en una guitarra: cerca de la punta suena más brillante y en el medio más redondo.
 
-**6. La grabación.** Un lienzo aparte copia cada cuadro a 1280 px y le suma la marca de agua. `MediaRecorder` lo junta con la salida de audio y arma el video.
+**6. El sonido.** Síntesis [Karplus-Strong](https://es.wikipedia.org/wiki/Algoritmo_de_Karplus-Strong): un buffer cortito de ruido que se recircula promediándose consigo mismo. Ese promedio funciona como un filtro, y lo que queda suena a cuerda pulsada. El largo del buffer define la nota (cuerda larga, en centímetros reales = nota grave), que se ajusta a la escala elegida y pasa por un eco suave y un compresor.
+
+**7. La grabación.** Un lienzo aparte copia cada cuadro a 1280 px y le suma la marca de agua. `MediaRecorder` lo junta con la salida de audio y arma el video.
 
 ## Correrlo en tu compu
 
@@ -168,6 +182,7 @@ juego/                 Tiro al vuelo: página, estilos y juego.js (blancos 3D, p
 lib/camera.js          abrir la cámara, errores, mapeo a la pantalla
 lib/vision.js          cargar los modelos de MediaPipe
 lib/gestures.js        gestos (pulgar arriba, pistolita, gatillo) y la pose 3D de la mano
+lib/space.js           el espacio 3D: profundidad de la mano, perspectiva, vista 3D y contorno de la mano
 lib/gun3d.js           la pistola de agua en 3D (three.js) y los reflejos
 manifest.webmanifest   para instalarla como app en el celu
 assets/                íconos e imágenes para compartir en redes

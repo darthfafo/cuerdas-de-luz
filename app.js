@@ -7,12 +7,14 @@
  * Todo corre en el navegador: ningún cuadro de la cámara sale del dispositivo.
  */
 
-import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "./lib/camera.js";
-import { loadVision } from "./lib/vision.js";
+import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "./lib/camera.js?v=20261124b";
+import { loadVision } from "./lib/vision.js?v=20261124b";
 import {
   clamp, clamp01, dist, midpoint, palmCenter, isThumbsUp, isGunShape, isThumbCocked, isGripShape, isFist, indexBend, handPose3D,
-} from "./lib/gestures.js";
-import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun } from "./lib/gun3d.js";
+  sub3, nrm3, cross3,
+} from "./lib/gestures.js?v=20261124b";
+import { createSpace, Z_DEFAULT, add3, lerp3, dist3, screenToU, handSilhouette } from "./lib/space.js?v=20261124b";
+import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun } from "./lib/gun3d.js?v=20261124b";
 
 // ───────────────────────── Configuración ─────────────────────────
 const SITE_URL = "https://darthfafo.github.io/cuerdas-de-luz/";
@@ -34,7 +36,7 @@ const FONT = 'ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif';
 // Celulares y tablets (IS_TOUCH): menos carga, y gestos pensados para cuando una mano sostiene el teléfono.
 const NUM_HANDS = IS_TOUCH ? 2 : 4;      // en el celu casi nunca hay otra persona tan cerca
 const FACE_EVERY = IS_TOUCH ? 6 : 3;     // cada cuántos cuadros se busca la cara (si no hay barra en los ojos)
-const MIN_SOLO_PX = 90;                  // largo mínimo de una cuerda hecha con una sola mano
+const MIN_M = 0.07, MIN_SOLO_M = 0.09;   // largo mínimo (metros) de una cuerda hecha con dos manos / con una
 
 const SCALES = {
   "pentatónica": [0, 2, 4, 7, 9],
@@ -57,7 +59,7 @@ const ui = {
   intro: $("intro"), ring: $("ring"), prog: $("prog"), status: $("status"),
   introActions: $("introActions"), retry: $("retryBtn"), noCam: $("noCamBtn"), skip: $("skipBtn"),
   rec: $("recBtn"), recLabel: $("recLabel"), recBar: $("recBar"), countdown: $("countdown"),
-  eyes: $("eyesBtn"), undo: $("undoBtn"), clear: $("clearBtn"), sound: $("soundBtn"),
+  eyes: $("eyesBtn"), view: $("viewBtn"), undo: $("undoBtn"), clear: $("clearBtn"), sound: $("soundBtn"),
   helpBtn: $("helpBtn"), help: $("help"), scaleName: $("scaleName"), toast: $("toast"),
   modal: $("clipModal"), clipVideo: $("clipVideo"), clipInfo: $("clipInfo"),
   clipDownload: $("clipDownload"), clipShare: $("clipShare"), clipDiscard: $("clipDiscard"), clipClose: $("clipClose"),
@@ -67,6 +69,7 @@ const ui = {
 let started = false, startedAt = 0, gateReady = false;
 let useCamera = true, showHands = true, showVideo = true, hideEyes = false;
 let scaleIdx = 0;
+let depthOn = true;          // para tocar una cuerda hay que estar a su profundidad
 const strings = [];
 const sparks = [];
 let hueSeed = Math.random() * 360;
@@ -75,8 +78,9 @@ const pointers = new Map(); // dedos / mouse apretados: pointerId → trazo en c
 
 // ───────────────────────── Lienzo ─────────────────────────
 let W = 0, H = 0, DPR = 1, bgGradient = null;
+let ox = 0, oy = 0, dw = 0, dh = 0; // dónde cae la imagen de la cámara en la pantalla (computeMap)
+const space = createSpace(); // las cuerdas viven en 3D (metros): al cambiar la ventana se reacomodan solas
 function resize() {
-  const oldW = W, oldH = H;
   W = innerWidth; H = innerHeight;
   DPR = Math.min(devicePixelRatio || 1, 2, Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, W * H)));
   DPR = Math.max(1, DPR);
@@ -86,11 +90,7 @@ function resize() {
   bgGradient = ctx.createRadialGradient(W * 0.5, H * 0.4, 0, W * 0.5, H * 0.4, Math.hypot(W, H) * 0.6);
   bgGradient.addColorStop(0, "#16121f");
   bgGradient.addColorStop(1, "#000");
-  // las cuerdas acompañan el cambio de tamaño de la ventana
-  if (oldW && oldH && (oldW !== W || oldH !== H)) {
-    const sx = W / oldW, sy = H / oldH;
-    for (const s of strings) { s.a.x *= sx; s.a.y *= sy; s.b.x *= sx; s.b.y *= sy; }
-  }
+  space.setSize(W, H, dw || W, dh || H);
 }
 addEventListener("resize", resize);
 resize();
@@ -179,7 +179,7 @@ function quantize(freq) {
 }
 
 // Un buffer de ruido que se recircula promediándose: suena a cuerda pulsada.
-function pluckSound(freq, velocity, pan, pos) {
+function pluckSound(freq, velocity, pan, pos, level = 1) {
   if (!audio || audio.state !== "running" || muted) return;
   const sr = audio.sampleRate, len = Math.floor(sr * 2.6);
   const buf = audio.createBuffer(1, len, sr);
@@ -198,7 +198,7 @@ function pluckSound(freq, velocity, pan, pos) {
     idx = next;
   }
   const src = audio.createBufferSource(); src.buffer = buf;
-  const gain = audio.createGain(); gain.gain.value = 0.25 + 0.55 * velocity;
+  const gain = audio.createGain(); gain.gain.value = (0.25 + 0.55 * velocity) * level;
   src.connect(gain);
   if (audio.createStereoPanner) { const pn = audio.createStereoPanner(); pn.pan.value = clamp(pan, -1, 1); gain.connect(pn); pn.connect(master); }
   else gain.connect(master);
@@ -210,38 +210,43 @@ function pluckSound(freq, velocity, pan, pos) {
 
 // ───────────────────────── Cuerdas ─────────────────────────
 // Cada cuerda vibra como suma de sus 6 primeros modos (armónicos) con amortiguación.
+// Viven en 3D: a y b son puntos en metros. El largo real define la nota.
 function addString(a, b) {
   hueSeed = (hueSeed + 47) % 360;
-  const s = { a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y }, hue: hueSeed, modes: [], lastPluck: 0 };
+  const s = { a: { ...a }, b: { ...b }, hue: hueSeed, modes: [], lastPluck: 0, near: 0 };
   strings.push(s);
   if (strings.length > MAX_STRINGS) strings.shift();
   pluck(s, 0.5, 0.4, 1);
 }
+const stringMid = (s) => space.project(lerp3(s.a, s.b, 0.5));
 function undoString() {
   const s = strings.pop();
-  if (s) spawnSparks(midpoint(s.a, s.b), s.hue, 10);
+  if (s) spawnSparks(stringMid(s), s.hue, 10);
 }
 function clearStrings() {
-  for (const s of strings) spawnSparks(midpoint(s.a, s.b), s.hue, 10);
+  for (const s of strings) spawnSparks(stringMid(s), s.hue, 10);
   strings.length = 0;
 }
-function stringFreq(s) {
-  const ref = Math.hypot(W, H);
-  return quantize(110 * Math.pow(2, 3.2 * (1 - Math.min(1, dist(s.a, s.b) / (ref * 0.9)))));
+function stringFreq(s) { // ~4 octavas: 5 cm bien agudo, 90 cm o más bien grave
+  return quantize(110 * Math.pow(2, 3.2 * (1 - Math.min(1, dist3(s.a, s.b) / 0.9))));
 }
-function pluck(s, t, velocity, sign) {
+// Dirección en la que vibra: perpendicular a la cuerda y a la mirada de la cámara.
+function swingDir(s) {
+  const c = cross3(sub3(s.b, s.a), lerp3(s.a, s.b, 0.5));
+  return Math.hypot(c.x, c.y, c.z) > 1e-6 ? nrm3(c) : { x: 0, y: 1, z: 0 }; // cuerda que apunta derecho a la cámara
+}
+function pluck(s, u, velocity, sign) {
   const now = performance.now() / 1000;
-  const L = dist(s.a, s.b);
-  const amp = Math.min(38, 6 + velocity * 34) * Math.min(1, L / 300);
+  const amp = Math.min(0.022, 0.0035 + velocity * 0.02) * Math.min(1, dist3(s.a, s.b) / 0.2);
   for (let n = 1; n <= 6; n++) {
-    const A = amp * Math.sin(n * Math.PI * t) / (n * n) * 1.6;
+    const A = amp * Math.sin(n * Math.PI * u) / (n * n) * 1.6;
     s.modes.push({ n, A: A * sign, t0: now, w: 2 * Math.PI * (2.2 + n * 2.6), decay: 1.1 + n * 0.6 });
   }
   if (s.modes.length > 60) s.modes.splice(0, s.modes.length - 60);
   s.lastPluck = now;
-  const p = { x: s.a.x + (s.b.x - s.a.x) * t, y: s.a.y + (s.b.y - s.a.y) * t };
+  const P = lerp3(s.a, s.b, u), p = space.project(P);
   spawnSparks(p, s.hue, 14 + velocity * 26);
-  pluckSound(stringFreq(s), velocity, (p.x / W) * 2 - 1, t);
+  pluckSound(stringFreq(s), velocity, (p.x / W) * 2 - 1, u, clamp(Z_DEFAULT / P.z, 0.4, 1.3)); // lejos suena más bajo
 }
 function displacement(s, u, now) {
   let d = 0;
@@ -260,19 +265,28 @@ function segIntersect(p1, p2, p3, p4) {
   const u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? { t, u } : null;
 }
-// Toca toda cuerda que cruce el segmento p0→p1 (dedo, mouse o touch). dt en ms → fuerza.
+// Cuánto puede diferir la profundidad del dedo y la de la cuerda para que la toque (metros).
+const depthTolerance = (z) => 0.08 + 0.07 * z;
+// Toca toda cuerda que cruce el segmento p0→p1 (dedo, mouse o gota). dt en ms → fuerza.
+// Si los puntos traen z (la mano medida), además tienen que estar a la profundidad de la cuerda en ese lugar.
 function pluckAlong(p0, p1, dt) {
   const move = dist(p0, p1);
   if (move < 2) return false;
   const velocity = clamp01(move / Math.max(dt || 16, 8) / 1.5);
   const now = performance.now() / 1000;
+  const withDepth = depthOn && p0.z && p1.z;
   let hit = false;
   for (const s of strings) {
     if (now - s.lastPluck < 0.12) continue;
-    const x = segIntersect(s.a, s.b, p0, p1);
-    if (!x || x.t < 0.04 || x.t > 0.96) continue;
-    const nx = -(s.b.y - s.a.y), ny = s.b.x - s.a.x;
-    pluck(s, x.t, Math.max(0.15, velocity), Math.sign((p1.x - p0.x) * nx + (p1.y - p0.y) * ny) || 1);
+    const x = segIntersect(space.projectCam(s.a), space.projectCam(s.b), p0, p1);
+    if (!x) continue;
+    const u = screenToU(x.t, s.a.z, s.b.z);
+    if (u < 0.04 || u > 0.96) continue;
+    const P = lerp3(s.a, s.b, u);
+    if (withDepth && Math.abs(p0.z + (p1.z - p0.z) * x.u - P.z) > depthTolerance(P.z)) continue; // pasa por delante o por detrás
+    const q0 = space.projectCam(P), q1 = space.projectCam(add3(P, swingDir(s), 0.02));
+    const sign = Math.sign((p1.x - p0.x) * (q1.x - q0.x) + (p1.y - p0.y) * (q1.y - q0.y)) || 1;
+    pluck(s, u, Math.max(0.15, velocity), sign);
     hit = true;
   }
   return hit;
@@ -308,10 +322,11 @@ function onCameraLost() {
 const hasVideo = () => useCamera && video.readyState >= 2 && video.videoWidth > 0;
 
 // Mapeo video → pantalla: espejado y recortado para cubrir toda la ventana.
-let ox = 0, oy = 0, dw = 0, dh = 0;
 function computeMap() {
   const m = coverMap(video, W, H);
-  if (m) ({ ox, oy, dw, dh } = m);
+  if (!m) return;
+  ({ ox, oy, dw, dh } = m);
+  space.setSize(W, H, dw, dh);
 }
 const toScreen = (p) => ({ x: W - (ox + p.x * dw), y: oy + p.y * dh });
 
@@ -359,6 +374,7 @@ function updatePerson(now) {
 const newHand = () => ({
   pts: null, seen: -1e9, pinching: false, pinchPos: null, pinchStart: null, soloBlocked: false,
   pinchFrames: 0, releaseFrames: 0, prevTip: null, prevT: 0,
+  z: Z_DEFAULT, measured: false, p3: null, // profundidad (metros) y los 21 puntos en 3D
   gun: null, gunHoldStart: 0, gunHoldAt: null, gunCharge: 0, // easter egg
 });
 const hands = { L: newHand(), R: newHand() };
@@ -385,6 +401,16 @@ function selectHands(result, now) {
   return list;
 }
 
+// Profundidad de la mano: cuántos píxeles mide en pantalla un metro de esa mano (lib/space.js), suavizado.
+function measureDepth(st, pts, world, stale) {
+  const z = space.depthOf(pts, world);
+  st.measured = z !== null;
+  if (z !== null) st.z = stale ? z : st.z + (z - st.z) * 0.35;
+  else if (stale) st.z = Z_DEFAULT;
+  st.p3 = pts.map((p, i) => space.unproject(p.x, p.y, Math.max(0.1, st.z + (world ? world[i].z : 0))));
+}
+const pinch3 = (p) => space.unproject(p.x, p.y, p.z);
+
 function processHands(list, now) {
   const seen = new Set();
   for (const { key, pts, world } of list) {
@@ -394,6 +420,7 @@ function processHands(list, now) {
     st.seen = now; st.pts = pts;
     const size = dist(pts[0], pts[9]);
     st.fist = isFist(pts, world);
+    measureDepth(st, pts, world, stale);
 
     // Easter egg: con la pistola en la mano, el índice no pellizca ni toca (dispara agua).
     updateGun(st, pts, size, now, world);
@@ -402,8 +429,9 @@ function processHands(list, now) {
     // Pinza: distancia pulgar-índice relativa al tamaño de la mano, con histéresis para que no parpadee.
     const thumb = pts[4], index = pts[8];
     const pd = dist(thumb, index);
-    const m = midpoint(thumb, index);
-    st.pinchPos = stale || !st.pinchPos ? m : { x: st.pinchPos.x * 0.45 + m.x * 0.55, y: st.pinchPos.y * 0.45 + m.y * 0.55 };
+    const m = { ...midpoint(thumb, index), z: (st.p3[4].z + st.p3[8].z) / 2 };
+    st.pinchPos = stale || !st.pinchPos ? m
+      : { x: st.pinchPos.x * 0.45 + m.x * 0.55, y: st.pinchPos.y * 0.45 + m.y * 0.55, z: st.pinchPos.z * 0.6 + m.z * 0.4 };
     if (!st.pinching) {
       if (pd < size * 0.28 && fistCharge <= 0.15) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; st.pinchStart = { ...st.pinchPos }; } }
       else st.pinchFrames = 0;
@@ -412,8 +440,9 @@ function processHands(list, now) {
     } else st.releaseFrames = 0;
 
     // Tocar: la punta del índice cruza una cuerda entre dos cuadros.
-    if (!st.pinching && st.prevTip && !stale) pluckAlong(st.prevTip, index, now - st.prevT);
-    st.prevTip = index; st.prevT = now;
+    const tip = { x: index.x, y: index.y, z: st.measured ? st.p3[8].z : 0 };
+    if (!st.pinching && st.prevTip && !stale) pluckAlong(st.prevTip, tip, now - st.prevT);
+    st.prevTip = tip; st.prevT = now;
   }
   for (const key of ["L", "R"]) {
     if (seen.has(key)) continue;
@@ -432,16 +461,16 @@ function processHands(list, now) {
     for (const st of [L, R]) if (st.pinching) endPinch(st);
   }
   if (live(L) && live(R)) {
-    bridge = { a: { ...L.pinchPos }, b: { ...R.pinchPos }, two: true };
+    bridge = { a: pinch3(L.pinchPos), b: pinch3(R.pinchPos), two: true };
   } else if (bridge?.two) {
-    if (dist(bridge.a, bridge.b) > MIN_STRING_PX) addString(bridge.a, bridge.b);
+    if (dist3(bridge.a, bridge.b) > MIN_M) addString(bridge.a, bridge.b);
     bridge = null;
     L.soloBlocked = L.pinching; R.soloBlocked = R.pinching; // la mano que sigue cerrada no arranca otra cuerda
   } else if (IS_TOUCH && [L, R].some((st) => live(st) && !st.soloBlocked)) {
     const st = live(L) && !L.soloBlocked ? L : R;
-    bridge = { a: { ...st.pinchStart }, b: { ...st.pinchPos }, two: false };
+    bridge = { a: pinch3(st.pinchStart), b: pinch3(st.pinchPos), two: false };
   } else if (bridge) {
-    if (dist(bridge.a, bridge.b) > MIN_SOLO_PX) addString(bridge.a, bridge.b);
+    if (dist3(bridge.a, bridge.b) > MIN_SOLO_M) addString(bridge.a, bridge.b);
     bridge = null;
   }
 }
@@ -850,6 +879,7 @@ function frame() {
   const k = lastFrame ? Math.min(3, (now - lastFrame) / 16.67) : 1;
   lastFrame = now;
   track(now);
+  space.updateView(now, k);
   render(now, k);
   if (recState === "countdown") tickCountdown(now);
   else if (recState === "recording") tickRecording(now);
@@ -890,59 +920,150 @@ function drawEyeBar(now) {
   ctx.fillRect(-w / 2, -h / 2, w, h);
   ctx.restore();
 }
-function drawRuler(a, b, hue, alpha) {
-  const L = dist(a, b);
-  if (L < 10) return;
-  const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L, nx = -uy, ny = ux;
+// Pistas de profundidad: lo cercano se ve más grueso y brillante; lo lejano, más fino y tenue.
+const nearness = (z) => Math.pow(Z_DEFAULT / z, 1.25);
+const depthAlpha = (z) => clamp(1.3 - 0.55 * z, 0.3, 1);
+
+// Regla en centímetros reales (marca chica cada 2, grande cada 10): en perspectiva las marcas se juntan a lo lejos.
+function drawRuler(a, b, dir, hue, alpha, u0 = 0, u1 = 1) {
+  const L = dist3(a, b);
+  if (L < 0.03) return;
+  const step = L > 2 ? 0.1 : 0.02;
   ctx.strokeStyle = `hsla(${hue},100%,88%,${0.4 * alpha})`;
   ctx.lineWidth = 0.5;
   ctx.beginPath();
-  for (let d = 24, i = 1; d < L; d += 24, i++) {
-    const len = i % 5 === 0 ? 8 : 3, x = a.x + ux * d, y = a.y + uy * d;
-    ctx.moveTo(x + nx * 4, y + ny * 4); ctx.lineTo(x + nx * (4 + len), y + ny * (4 + len));
+  for (let d = step, i = 1; d < L; d += step, i++) {
+    const u = d / L;
+    if (u < u0 || u > u1) continue;
+    const P = lerp3(a, b, u), q0 = space.project(add3(P, dir, 0.003)), q1 = space.project(add3(P, dir, i % 5 === 0 ? 0.009 : 0.005));
+    ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y);
   }
   ctx.stroke();
 }
-function drawEndpoint(p, hue) {
-  ctx.strokeStyle = `hsla(${hue},100%,88%,0.75)`;
-  ctx.lineWidth = 0.8;
-  ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(p.x - 8, p.y); ctx.lineTo(p.x + 8, p.y); ctx.moveTo(p.x, p.y - 8); ctx.lineTo(p.x, p.y + 8);
-  ctx.lineWidth = 0.5; ctx.stroke();
+function drawEndpoint(P, hue) {
+  const p = space.project(P), r = clamp(4 * nearness(p.z), 1.6, 11);
+  ctx.strokeStyle = `hsla(${hue},100%,88%,${0.75 * depthAlpha(p.z)})`;
+  ctx.lineWidth = clamp(0.8 * nearness(p.z), 0.4, 2);
+  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(p.x - r * 2, p.y); ctx.lineTo(p.x + r * 2, p.y); ctx.moveTo(p.x, p.y - r * 2); ctx.lineTo(p.x, p.y + r * 2);
+  ctx.lineWidth = clamp(0.5 * nearness(p.z), 0.3, 1.2); ctx.stroke();
 }
-function drawString(s, now) {
-  const L = dist(s.a, s.b);
-  const nx = -(s.b.y - s.a.y) / L, ny = (s.b.x - s.a.x) / L;
-  if (s.modes.length) s.modes = s.modes.filter((m) => Math.abs(m.A) * Math.exp(-m.decay * (now - m.t0)) > 0.05);
-  const e = s.modes.length ? Math.min(1, energy(s, now) / 40) : 0;
-
+// Cinta con el ancho en perspectiva (w: función del punto proyectado).
+function ribbon(pts, w) {
   ctx.beginPath();
-  ctx.moveTo(s.a.x, s.a.y);
-  if (s.modes.length) {
-    const segs = clamp(Math.floor(L / 8), 24, 120);
-    for (let i = 1; i <= segs; i++) {
-      const u = i / segs, d = displacement(s, u, now);
-      ctx.lineTo(s.a.x + (s.b.x - s.a.x) * u + nx * d, s.a.y + (s.b.y - s.a.y) * u + ny * d);
-    }
-  } else ctx.lineTo(s.b.x, s.b.y); // en reposo es una recta: no hace falta calcular la onda
-
+  const side = (i, sg) => {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], p = pts[i];
+    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1, h = (sg * w(p)) / 2;
+    return [p.x - ((b.y - a.y) / l) * h, p.y + ((b.x - a.x) / l) * h];
+  };
+  ctx.moveTo(...side(0, 1));
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(...side(i, 1));
+  for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(...side(i, -1));
+  ctx.closePath();
+}
+// u0–u1: qué tramo dibujar (para volver a pintar solo lo que queda delante de la mano).
+function drawString(s, now, u0 = 0, u1 = 1) {
+  if (s.modes.length) s.modes = s.modes.filter((m) => Math.abs(m.A) * Math.exp(-m.decay * (now - m.t0)) > 0.00005);
+  const e = s.modes.length ? Math.min(1, energy(s, now) / 0.025) : 0;
+  const glow = Math.max(e, s.near * 0.45); // también brilla un poco cuando el dedo está a su profundidad
+  const dir = swingDir(s), pa = space.project(s.a), pb = space.project(s.b);
+  // en reposo es una recta (en pantalla, el ancho en perspectiva también es lineal): alcanzan dos puntos
+  const segs = s.modes.length ? Math.max(2, Math.round(clamp(dist(pa, pb) / 8, 24, 120) * (u1 - u0))) : 1;
+  const pts = [];
+  for (let i = 0; i <= segs; i++) {
+    const u = u0 + (u1 - u0) * (i / segs);
+    pts.push(space.project(add3(lerp3(s.a, s.b, u), dir, s.modes.length ? displacement(s, u, now) : 0)));
+  }
+  const first = pts[0], last = pts[segs];
+  const fade = (l, alpha) => {
+    const g = ctx.createLinearGradient(first.x, first.y, last.x, last.y);
+    g.addColorStop(0, `hsla(${s.hue},100%,${l}%,${alpha * depthAlpha(first.z)})`);
+    g.addColorStop(1, `hsla(${s.hue},100%,${l}%,${alpha * depthAlpha(last.z)})`);
+    return g;
+  };
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
-  ctx.lineCap = "round"; ctx.lineJoin = "round";
-  if (e > 0.02) { ctx.shadowColor = `hsl(${s.hue},100%,70%)`; ctx.shadowBlur = 4 + 12 * e; } // el brillo caro, solo mientras vibra
-  ctx.strokeStyle = `hsla(${s.hue},100%,70%,${0.18 + 0.35 * e})`;
-  ctx.lineWidth = 1.6 + 1.6 * e;
-  ctx.stroke();
+  if (glow > 0.02) { ctx.shadowColor = `hsl(${s.hue},100%,70%)`; ctx.shadowBlur = 4 + 12 * glow; } // el brillo caro, solo si hace falta
+  ribbon(pts, (p) => clamp((1.6 + 1.6 * glow) * nearness(p.z), 0.8, 9));
+  ctx.fillStyle = fade(70, 0.2 + 0.35 * glow); ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = `hsla(${s.hue},100%,93%,${0.75 + 0.25 * e})`;
-  ctx.lineWidth = 0.7;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(s.a.x + nx * 4, s.a.y + ny * 4); ctx.lineTo(s.b.x + nx * 4, s.b.y + ny * 4);
-  ctx.strokeStyle = `hsla(${s.hue},100%,85%,0.08)`; ctx.lineWidth = 0.5; ctx.stroke();
-  drawRuler(s.a, s.b, s.hue, 0.6);
+  ribbon(pts, (p) => clamp(0.75 * nearness(p.z), 0.45, 3.2));
+  ctx.fillStyle = fade(93, 0.8 + 0.2 * glow); ctx.fill();
+  drawRuler(s.a, s.b, dir, s.hue, 0.6 * depthAlpha((s.a.z + s.b.z) / 2), u0, u1);
   ctx.restore();
-  drawEndpoint(s.a, s.hue); drawEndpoint(s.b, s.hue);
+  if (u0 === 0) drawEndpoint(s.a, s.hue);
+  if (u1 === 1) drawEndpoint(s.b, s.hue);
+}
+// La mano tapa lo que le queda atrás: se vuelve a pintar el video en su contorno y, encima, lo que está adelante.
+function drawHandOcclusion(st, t, now) {
+  const limit = st.z + 0.03;
+  if (!strings.some((s) => Math.max(s.a.z, s.b.z) > limit)) return;
+  ctx.save();
+  ctx.clip(handSilhouette(st.pts));
+  drawVideo(0);
+  if (hideEyes) drawEyeBar(now); // la barra de los ojos va siempre arriba del video
+  ctx.fillStyle = "rgba(0,0,0,0.18)"; ctx.fillRect(0, 0, W, H);
+  for (const s of strings) {
+    const za = s.a.z, zb = s.b.z;
+    if (za <= limit && zb <= limit) drawString(s, t);
+    else if (za <= limit) drawString(s, t, 0, (limit - za) / (zb - za));
+    else if (zb <= limit) drawString(s, t, (limit - za) / (zb - za), 1);
+  }
+  ctx.restore();
+}
+// Ayuda de profundidad: si el dedo está sobre una cuerda pero más cerca o más lejos, dice cuánto falta.
+function updateNear(k, now) {
+  let help = null;
+  for (const s of strings) {
+    let near = 0;
+    for (const st of Object.values(hands)) {
+      if (!st.pts || now - st.seen > 150 || !st.measured || st.gun || st.pinching || !depthOn) continue;
+      const tip = st.prevTip;
+      if (!tip?.z) continue;
+      const a = space.projectCam(s.a), b = space.projectCam(s.b), l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2 || 1;
+      const t = clamp01(((tip.x - a.x) * (b.x - a.x) + (tip.y - a.y) * (b.y - a.y)) / l2);
+      const d = Math.hypot(a.x + (b.x - a.x) * t - tip.x, a.y + (b.y - a.y) * t - tip.y);
+      if (d > 45) continue;
+      const z = lerp3(s.a, s.b, screenToU(t, s.a.z, s.b.z)).z, dz = tip.z - z;
+      if (Math.abs(dz) <= depthTolerance(z)) near = 1;
+      else if (!help || d < help.d) help = { d, tip, dz };
+    }
+    s.near += (near - s.near) * (1 - Math.pow(0.8, k));
+  }
+  return help;
+}
+function drawDepthHelp(h) {
+  const cm = Math.round(Math.abs(h.dz) * 100);
+  ctx.save();
+  ctx.font = `600 12px ${FONT}`; ctx.textAlign = "center";
+  ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = 6;
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  ctx.fillText(h.dz > 0 ? `⤓ acercá ${cm} cm` : `⤒ alejá ${cm} cm`, h.tip.x, h.tip.y - 22);
+  ctx.restore();
+}
+// Vista 3D: una caja con cuadrícula para ver el espacio desde otro ángulo.
+function drawRoom(alpha) {
+  const X = 0.5, Y = 0.32, Z0 = 0.3, Z1 = 1.3;
+  const line = (a, b) => { const p = space.project(a), q = space.project(b); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); };
+  ctx.save();
+  ctx.strokeStyle = `rgba(150,190,255,${0.22 * alpha})`; ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  for (let i = 0; i <= 10; i++) {
+    const z = Z0 + (Z1 - Z0) * (i / 10), x = -X + 2 * X * (i / 10), y = -Y + 2 * Y * (i / 10);
+    line({ x: -X, y: Y, z }, { x: X, y: Y, z });            // piso
+    line({ x, y: Y, z: Z0 }, { x, y: Y, z: Z1 });
+    line({ x, y: -Y, z: Z1 }, { x, y: Y, z: Z1 });          // fondo
+    line({ x: -X, y, z: Z1 }, { x: X, y, z: Z1 });
+  }
+  ctx.stroke();
+  ctx.fillStyle = `rgba(200,220,255,${0.6 * alpha})`; ctx.font = `11px ${FONT}`;
+  for (const z of [0.3, 0.5, 0.7, 0.9, 1.1, 1.3]) { const p = space.project({ x: X + 0.02, y: Y, z }); ctx.fillText(`${Math.round(z * 100)} cm`, p.x, p.y); }
+  // sombra de cada cuerda en el piso: ayuda a leer dónde está
+  ctx.strokeStyle = `rgba(255,255,255,${0.16 * alpha})`; ctx.lineWidth = 1.2; ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  for (const s of strings) line({ ...s.a, y: Y }, { ...s.b, y: Y });
+  ctx.stroke();
+  ctx.restore();
 }
 function drawSparks(k) {
   ctx.save();
@@ -962,7 +1083,7 @@ function drawSparks(k) {
   ctx.restore();
 }
 function drawHand(st) {
-  const p = st.pts;
+  const p = space.view.amt > 0.001 && st.p3 ? st.p3.map((q) => space.project(q)) : st.pts;
   ctx.save();
   ctx.strokeStyle = "rgba(40,230,80,0.9)"; ctx.lineWidth = 3;
   ctx.beginPath();
@@ -980,19 +1101,25 @@ function drawCursor(st) {
 }
 function drawBridge(b, now) {
   const hue = (hueSeed + 47) % 360;
+  const pa = space.project(b.a), pb = space.project(b.b);
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   ctx.shadowColor = `hsl(${hue},100%,70%)`; ctx.shadowBlur = 6;
   ctx.setLineDash([6, 5]); ctx.lineDashOffset = -now / 40;
-  ctx.beginPath(); ctx.moveTo(b.a.x, b.a.y); ctx.lineTo(b.b.x, b.b.y);
+  ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
   ctx.strokeStyle = `hsla(${hue},100%,88%,0.8)`; ctx.lineWidth = 0.8; ctx.stroke();
   ctx.setLineDash([]); ctx.shadowBlur = 0;
-  drawRuler(b.a, b.b, hue, 0.8);
+  drawRuler(b.a, b.b, swingDir(b), hue, 0.8);
   ctx.globalCompositeOperation = "source-over";
   drawEndpoint(b.a, hue); drawEndpoint(b.b, hue);
-  const m = midpoint(b.a, b.b);
+  const m = midpoint(pa, pb);
   ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "11px ui-monospace, monospace";
-  ctx.fillText(`${Math.round(dist(b.a, b.b))} px`, m.x + 10, m.y - 10);
+  ctx.fillText(`${Math.round(dist3(b.a, b.b) * 100)} cm`, m.x + 10, m.y - 10);
+  // a qué distancia de la cámara está cada punta
+  if (Math.abs(b.a.z - b.b.z) > 0.02) {
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    for (const [p, P] of [[pa, b.a], [pb, b.b]]) ctx.fillText(`↧${Math.round(P.z * 100)}`, p.x + 14, p.y + 18);
+  }
   ctx.restore();
 }
 
@@ -1001,23 +1128,31 @@ function render(now, k) {
   if (hasVideo() && showVideo) {
     computeMap();
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-    const blur = started ? clamp01(1 - (now - startedAt) / 700) : 1;
+    const blur = Math.max(started ? clamp01(1 - (now - startedAt) / 700) : 1, space.view.amt);
     drawVideo(blur);
     if (hideEyes) drawEyeBar(now);
     ctx.fillStyle = `rgba(0,0,0,${0.18 + 0.2 * blur})`; ctx.fillRect(0, 0, W, H);
   } else {
     ctx.fillStyle = bgGradient; ctx.fillRect(0, 0, W, H);
   }
-  const t = now / 1000;
-  for (const s of strings) drawString(s, t);
+  const t = now / 1000, inView = space.view.amt;
+  if (inView > 0.01) { ctx.fillStyle = `rgba(4,6,14,${0.72 * inView})`; ctx.fillRect(0, 0, W, H); drawRoom(inView); }
+  const visible = Object.values(hands).filter((st) => st.pts && now - st.seen < 150);
+  const depthHelp = updateNear(k, now);
+  // de lo más lejano a lo más cercano
+  for (const s of [...strings].sort((p, q) => q.a.z + q.b.z - p.a.z - p.b.z)) drawString(s, t);
+  if (started && depthOn && showVideo && hasVideo() && inView === 0 && now - startedAt > 700) {
+    for (const st of visible.filter((h) => h.measured).sort((p, q) => q.z - p.z)) drawHandOcclusion(st, t, now);
+  }
   drawSparks(k);
   if (!started) return;
-  for (const st of Object.values(hands)) {
-    if (!st.pts || now - st.seen > 150) continue;
+  for (const st of visible) {
     if (showHands) drawHand(st);
+    if (inView > 0.05) continue;
     if (!st.gun) drawCursor(st);
     drawGunCharge(st);
   }
+  if (depthHelp && inView === 0) drawDepthHelp(depthHelp);
   drawFistCharge();
   for (const st of Object.values(hands)) {
     const g = st.gun;
@@ -1035,7 +1170,7 @@ function render(now, k) {
   drawDrops(k);
   if (bridge) drawBridge(bridge, now);
   for (const ptr of pointers.values()) {
-    if (!ptr.plucked && dist(ptr.start, ptr.cur) > 8) drawBridge({ a: ptr.start, b: ptr.cur }, now);
+    if (!ptr.plucked && !ptr.orbit && dist(ptr.start, ptr.cur) > 8) drawBridge({ a: pointer3(ptr.start), b: pointer3(ptr.cur) }, now);
   }
 }
 
@@ -1250,6 +1385,17 @@ function toggleEyes() {
   setEyes(!hideEyes);
   if (hideEyes && !faceDetector) toast("Cargando el detector de caras…");
 }
+function toggleView() {
+  const v = space.view;
+  v.on = !v.on;
+  if (v.on) { v.dragYaw = 0; v.dragPitch = 0; toast("Vista 3D: arrastrá para girar", { ms: 2200 }); }
+  ui.view.classList.toggle("on", v.on);
+  ui.view.setAttribute("aria-pressed", String(v.on));
+}
+function toggleDepth() {
+  depthOn = !depthOn;
+  toast(depthOn ? "Profundidad activada: tocá cada cuerda a su distancia" : "Profundidad desactivada: se toca desde cualquier distancia", { ms: 2600 });
+}
 function cycleScale() {
   scaleIdx = (scaleIdx + 1) % SCALE_NAMES.length;
   ui.scaleName.textContent = SCALE_NAMES[scaleIdx];
@@ -1277,6 +1423,7 @@ ui.noCam.addEventListener("click", () => start({ noCamera: true }));
 ui.skip.addEventListener("click", () => start());
 ui.rec.addEventListener("click", toggleRecording);
 ui.eyes.addEventListener("click", toggleEyes);
+ui.view.addEventListener("click", toggleView);
 ui.undo.addEventListener("click", undoString);
 ui.clear.addEventListener("click", clearStrings);
 ui.sound.addEventListener("click", toggleMute);
@@ -1296,6 +1443,8 @@ addEventListener("keydown", (e) => {
   switch (e.key.toLowerCase()) {
     case "r": toggleRecording(); break;
     case "o": toggleEyes(); break;
+    case "d": toggleView(); break;
+    case "p": toggleDepth(); break;
     case "z": undoString(); break;
     case "c": clearStrings(); break;
     case "m": toggleMute(); break;
@@ -1310,6 +1459,7 @@ addEventListener("keydown", (e) => {
 // Dedo / lápiz (multitouch): arrastrar crea, salvo que el trazo cruce una cuerda: en ese caso la toca.
 let hover = null, hoverT = 0;
 const pointerPos = (e) => ({ x: e.clientX, y: e.clientY });
+const pointer3 = (p) => space.unproject(p.x, p.y, Z_DEFAULT); // el mouse y el dedo trabajan a 60 cm
 const haptic = () => {
   if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
   try { navigator.vibrate?.(8); } catch { /* sin vibración */ }
@@ -1319,16 +1469,20 @@ canvas.addEventListener("pointerdown", (e) => {
   if (ui.help.classList.contains("show")) setHelp(false); // tocar el lienzo cierra la ayuda
   try { canvas.setPointerCapture(e.pointerId); } catch { /* sin captura: el gesto sigue igual */ }
   const p = pointerPos(e);
-  pointers.set(e.pointerId, { start: p, cur: p, last: p, lastT: e.timeStamp, plucked: false, mouse: e.pointerType === "mouse" });
+  pointers.set(e.pointerId, { start: p, cur: p, last: p, lastT: e.timeStamp, plucked: false, mouse: e.pointerType === "mouse", orbit: space.view.on });
 });
 canvas.addEventListener("pointermove", (e) => {
   if (!started) return;
   const p = pointerPos(e);
   const ptr = pointers.get(e.pointerId);
-  if (ptr) {
+  if (ptr?.orbit) { // en la vista 3D, arrastrar gira el espacio
+    space.view.dragYaw += (p.x - ptr.last.x) / 260;
+    space.view.dragPitch = clamp(space.view.dragPitch + (p.y - ptr.last.y) / 320, -0.9, 1.1);
+    ptr.last = p;
+  } else if (ptr) {
     if (!ptr.mouse && pluckAlong(ptr.last, p, e.timeStamp - ptr.lastT)) { ptr.plucked = true; haptic(); }
     ptr.cur = p; ptr.last = p; ptr.lastT = e.timeStamp;
-  } else if (e.pointerType === "mouse") {
+  } else if (e.pointerType === "mouse" && !space.view.on) {
     if (hover) pluckAlong(hover, p, e.timeStamp - hoverT);
     hover = p; hoverT = e.timeStamp;
   }
@@ -1338,7 +1492,7 @@ function endPointer(e) {
   if (!ptr) return;
   pointers.delete(e.pointerId);
   const p = pointerPos(e);
-  if (e.type === "pointerup" && !ptr.plucked && dist(ptr.start, p) > MIN_STRING_PX) addString(ptr.start, p);
+  if (e.type === "pointerup" && !ptr.orbit && !ptr.plucked && dist(ptr.start, p) > MIN_STRING_PX) addString(pointer3(ptr.start), pointer3(p));
   if (ptr.mouse) { hover = p; hoverT = e.timeStamp; }
 }
 canvas.addEventListener("pointerup", endPointer);
@@ -1403,7 +1557,7 @@ async function boot() {
 }
 
 // Solo en localhost con ?video=…: deja ver el estado desde la consola para probar sin cámara.
-if (TEST_VIDEO) window.__cuerdas = { processHands, hands, strings, drops, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
+if (TEST_VIDEO) window.__cuerdas = { space, addString, pluckAlong, processHands, hands, strings, drops, IS_TOUCH, getBridge: () => bridge, getDetectCost: () => detectCost };
 
 updateRecUI();
 updateSoundUI();

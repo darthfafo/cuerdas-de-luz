@@ -8,10 +8,10 @@
  * Cámara → MediaPipe (puntos 3D de la mano) → hacia dónde apunta el caño → mira en la pantalla
  * Blancos y pistola en 3D con three.js, efectos de agua en un lienzo 2D, sonidos sintetizados con Web Audio.
  */
-import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "../lib/camera.js";
-import { loadVision } from "../lib/vision.js";
-import { clamp, clamp01, dist, isGunShape, isThumbCocked, isGripShape, indexBend, handPose3D } from "../lib/gestures.js";
-import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun, starShape } from "../lib/gun3d.js";
+import { IS_TOUCH, testVideoUrl, openCamera, closeCamera, cameraErrorMessage, canRetryCamera, coverMap } from "../lib/camera.js?v=20261124b";
+import { loadVision } from "../lib/vision.js?v=20261124b";
+import { clamp, clamp01, dist, isGunShape, isThumbCocked, isGripShape, indexBend, handPose3D } from "../lib/gestures.js?v=20261124b";
+import { loadThree, randomGunStyle, easeOutBack, makeEnvironment, disposeObject, orientGun, buildGunModel, animateGun, starShape } from "../lib/gun3d.js?v=20261124b";
 
 // ───────────────────────── Configuración ─────────────────────────
 const GAME_SECONDS = 60;

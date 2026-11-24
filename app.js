@@ -428,7 +428,9 @@ const hands = { L: newHand(), R: newHand() };
 function selectHands(result, now) {
   let list = (result.landmarks || []).map((lms, i) => {
     const pts = lms.map(toScreen);
-    return { pts, size: dist(pts[0], pts[9]), key: result.handedness?.[i]?.[0]?.categoryName === "Left" ? "L" : "R" };
+    // puntos 3D en metros (espejados como la imagen): x derecha, y abajo, z hacia adentro de la pantalla
+    const world = result.worldLandmarks?.[i]?.map((w) => ({ x: -w.x, y: w.y, z: w.z })) || null;
+    return { pts, world, size: dist(pts[0], pts[9]), key: result.handedness?.[i]?.[0]?.categoryName === "Left" ? "L" : "R" };
   });
   if (!list.length) return [];
   if (person && now - person.seen < 800) {
@@ -446,7 +448,7 @@ function selectHands(result, now) {
 
 function processHands(list, now) {
   const seen = new Set();
-  for (const { key, pts } of list) {
+  for (const { key, pts, world } of list) {
     seen.add(key);
     const st = hands[key];
     const stale = now - st.seen > 200;
@@ -454,7 +456,7 @@ function processHands(list, now) {
     const size = dist(pts[0], pts[9]);
 
     // Easter egg: con la pistola en la mano, el índice no pellizca ni toca (dispara agua).
-    updateGun(st, pts, size, now);
+    updateGun(st, pts, size, now, world);
     if (st.gun) { if (st.pinching) endPinch(st); st.prevTip = null; continue; }
 
     // Pinza: distancia pulgar-índice relativa al tamaño de la mano, con histéresis para que no parpadee.
@@ -563,13 +565,14 @@ function isThumbCocked(p, size) {
   return thumb * palm < 0 && Math.abs(thumb) > size * 0.35;
 }
 
-function updateGun(st, p, size, now) {
+function updateGun(st, p, size, now, world) {
   if (!st.gun) {
     // hay que sostener la pistolita quieta (así no salta mientras tocás cuerdas con el índice)
     if (isGunShape(p) && isThumbCocked(p, size) && !st.pinching) {
       if (!st.gunHoldStart || dist(p[8], st.gunHoldAt) > size * 0.8) { st.gunHoldStart = now; st.gunHoldAt = { ...p[8] }; }
       st.gunCharge = clamp01((now - st.gunHoldStart) / GUN_HOLD_MS);
-      if (st.gunCharge >= 1) spawnGun(st, p, size, now);
+      if (st.gunCharge > 0.25) loadGun3D(); // el 3D se baja mientras cargás, solo si encontraste el easter egg
+      if (st.gunCharge >= 1) spawnGun(st, p, size, now, world);
     } else { st.gunHoldStart = 0; st.gunCharge = 0; }
     return;
   }
@@ -578,18 +581,20 @@ function updateGun(st, p, size, now) {
   else if (!g.lostAt) g.lostAt = now;
   else if (now - g.lostAt > 600) { dropGun(st); return; } // abriste la mano: chau pistola
   aimGun(g, p, size, false);
+  if (world) aim3D(g, p, world, false);
   // gatillo: bajar el pulgar hacia el índice (con histéresis)
   const trig = Math.min(dist(p[4], p[6]), dist(p[4], p[5])) / size;
   if (!g.firing && trig < 0.4) { g.firing = true; squirtSound(1); g.lastSound = now; }
   else if (g.firing && trig > 0.5) g.firing = false;
   else if (g.firing && now - g.lastSound > 320) { squirtSound(0.6); g.lastSound = now; }
 }
-function spawnGun(st, p, size, now) {
+function spawnGun(st, p, size, now, world) {
   const style = GUN_STYLES[Math.floor(Math.random() * GUN_STYLES.length)];
   st.gun = { style, born: performance.now(), firing: false, lostAt: 0, lastSound: 0, ox: p[5].x, oy: p[5].y, u: size, fx: 1, fy: 0, vx: 0, vy: 1 };
   st.gunHoldStart = 0; st.gunCharge = 0;
   if (st.pinching) endPinch(st);
   aimGun(st.gun, p, size, true);
+  if (world) aim3D(st.gun, p, world, true);
   spawnSparks(midpoint(p[5], p[8]), style.rainbow ? 290 : 195, 40);
   const pan = (p[5].x / W) * 2 - 1;
   pluckSound(quantize(660), 0.5, pan, 0.3);
@@ -601,7 +606,10 @@ function spawnGun(st, p, size, now) {
 }
 function dropGun(st) {
   const g = st.gun;
-  if (g) spawnSparks(gunPoint(g, 0.5, 0), g.style.rainbow ? 290 : 195, 18);
+  if (g) {
+    spawnSparks(g.nozzle || gunPoint(g, 0.5, 0), g.style.rainbow ? 290 : 195, 18);
+    if (g.model) disposeGunModel(g.model);
+  }
   st.gun = null; st.gunHoldStart = 0; st.gunCharge = 0;
 }
 // La pistola sigue al índice: el caño apunta como el dedo y la empuñadura va hacia la palma.
@@ -620,14 +628,17 @@ function aimGun(g, p, size, snap) {
 const gunPoint = (g, x, y) => ({ x: g.ox + (g.fx * x + g.vx * y) * g.u, y: g.oy + (g.fy * x + g.vy * y) * g.u });
 
 function emitDrops(g, k, now) {
-  const tip = gunPoint(g, 1.5, -0.02);
+  // con el modelo 3D, el chorro sale de la boquilla real y en la dirección del caño (aunque apunte hacia vos)
+  const tip = g.nozzle || gunPoint(g, 1.5, -0.02);
+  const dx = g.nozzle ? g.aim.x : g.fx, dy = g.nozzle ? g.aim.y : g.fy;
+  const toward = g.nozzle ? Math.max(0, g.aim.z) : 0; // 0 = de costado, 1 = apuntando a la cámara
   const speed = clamp(Math.min(W, H) / 700, 0.6, 1.4);
   const n = Math.max(1, Math.round(3 * k));
   for (let i = 0; i < n; i++) {
-    const sp = (9 + Math.random() * 4) * speed, spread = (Math.random() - 0.5) * 1.1;
+    const sp = (9 + Math.random() * 4) * speed, spread = (Math.random() - 0.5) * (1.1 + toward * 3);
     drops.push({
-      x: tip.x, y: tip.y, life: 1, r: 1.5 + Math.random() * 1.8,
-      vx: g.fx * sp + g.vx * spread, vy: g.fy * sp + g.vy * spread,
+      x: tip.x, y: tip.y, life: 1, r: 1.5 + Math.random() * 1.8, grow: toward,
+      vx: dx * sp - dy * spread, vy: dy * sp + dx * spread,
       hue: g.style.rainbow ? (now / 4 + Math.random() * 60) % 360 : null,
     });
   }
@@ -647,11 +658,12 @@ function drawDrops(k) {
     if (strings.length && pluckAlong(prev, d, 16.67 * k)) { spawnSparks(d, d.hue ?? 195, 6); continue; }
     drops[w++] = d;
     const a = d.life;
+    const r = d.r * (1 + d.grow * (1 - d.life) * 5); // si vienen hacia la cámara, se agrandan
     ctx.strokeStyle = d.hue === null ? `rgba(140,215,255,${0.35 * a})` : `hsla(${d.hue},100%,72%,${0.4 * a})`;
-    ctx.lineWidth = d.r;
+    ctx.lineWidth = r;
     ctx.beginPath(); ctx.moveTo(d.x - d.vx * 1.3, d.y - d.vy * 1.3); ctx.lineTo(d.x, d.y); ctx.stroke();
     ctx.fillStyle = d.hue === null ? `rgba(225,246,255,${0.9 * a})` : `hsla(${d.hue},100%,88%,${0.9 * a})`;
-    ctx.beginPath(); ctx.arc(d.x, d.y, d.r * 0.8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(d.x, d.y, r * 0.8, 0, Math.PI * 2); ctx.fill();
   }
   drops.length = w;
   ctx.restore();
@@ -666,6 +678,154 @@ function squirtSound(vol) {
   const gain = audio.createGain(); gain.gain.value = 0.22 * vol;
   src.connect(bp); bp.connect(gain); gain.connect(master);
   src.start();
+}
+
+// ── Versión 3D ──
+// three.js se baja recién cuando alguien empieza a hacer la pistolita (no pesa para nadie más).
+// La pistola se arma con piezas simples (no hay modelo que descargar) y se dibuja en perspectiva
+// solo en un cuadrado alrededor de la mano, que después se copia al lienzo (así también sale en los clips).
+const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js";
+const GUN_FOV = 40;
+let gl3d = null, gl3dLoading = false, gl3dFailed = false;
+
+function loadGun3D() {
+  if (gl3d || gl3dLoading || gl3dFailed) return;
+  gl3dLoading = true;
+  import(THREE_URL)
+    .then((T) => { gl3d = initGun3D(T); })
+    .catch((e) => { gl3dFailed = true; console.warn("Sin 3D: la pistola queda en 2D.", e); })
+    .finally(() => { gl3dLoading = false; });
+}
+function initGun3D(T) {
+  const renderer = new T.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" });
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setClearColor(0x000000, 0);
+  const scene = new T.Scene();
+  scene.add(new T.HemisphereLight(0xffffff, 0x3a4660, 1.7));
+  const key = new T.DirectionalLight(0xffffff, 2.6); key.position.set(-0.6, 1, 1); scene.add(key);
+  const rim = new T.DirectionalLight(0x9fd8ff, 1.5); rim.position.set(1, -0.4, -0.8); scene.add(rim);
+  return { T, renderer, scene, camera: new T.PerspectiveCamera(GUN_FOV, 1, 1, 50000), box: 0 };
+}
+
+// Orientación 3D de la mano: hacia dónde apunta el índice (f) y hacia dónde queda la palma (d),
+// en el sistema de la pantalla (x derecha, y abajo, z hacia adentro).
+function aim3D(g, p, w, snap) {
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+  const len = (a) => Math.hypot(a.x, a.y, a.z) || 1e-9;
+  const nrm = (a) => { const l = len(a); return { x: a.x / l, y: a.y / l, z: a.z / l }; };
+  const f = nrm(sub(w[8], w[5]));
+  const palm = { x: (w[0].x + w[9].x + w[13].x + w[17].x) / 4, y: (w[0].y + w[9].y + w[13].y + w[17].y) / 4, z: (w[0].z + w[9].z + w[13].z + w[17].z) / 4 };
+  let d = sub(palm, w[5]);
+  const along = d.x * f.x + d.y * f.y + d.z * f.z;
+  d = nrm({ x: d.x - along * f.x, y: d.y - along * f.y, z: d.z - along * f.z });
+  // tamaño real de la mano en píxeles: píxeles por metro (con huesos de la palma) × largo de la mano en 3D
+  let px = 0, m = 0;
+  for (const [a, b] of [[0, 5], [0, 17], [5, 17], [0, 9]]) { px += dist(p[a], p[b]); m += Math.hypot(w[a].x - w[b].x, w[a].y - w[b].y); }
+  const u = m > 1e-4 ? (px / m) * len(sub(w[9], w[0])) : dist(p[0], p[9]);
+  g.t3 = { f, d, u, ox: p[5].x, oy: p[5].y };
+  if (snap || !g.c3) g.c3 = { f: { ...f }, d: { ...d }, u, ox: p[5].x, oy: p[5].y };
+}
+
+// Modelo armado con piezas: x hacia adelante (caño), y hacia arriba (tanque), empuñadura hacia abajo.
+function buildGunModel(T, S) {
+  const group = new T.Group();
+  const plastic = (color) => new T.MeshPhysicalMaterial({ color, roughness: 0.3, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.12 });
+  const bodyMat = plastic(new T.Color(S.body[0]).lerp(new T.Color(S.body[1]), 0.55));
+  const gripMat = plastic(new T.Color(S.grip[0]).lerp(new T.Color(S.grip[1]), 0.5));
+  const accentMat = plastic(S.accent);
+  const nozzleMat = plastic(S.nozzle);
+  const add = (geo, mat, x, y, z = 0) => { const mesh = new T.Mesh(geo, mat); mesh.position.set(x, y, z); group.add(mesh); return mesh; };
+  const alongX = (mesh) => { mesh.rotation.z = -Math.PI / 2; return mesh; };
+
+  alongX(add(new T.CapsuleGeometry(0.19, 1.2, 8, 24), bodyMat, 0.45, 0));               // cuerpo
+  alongX(add(new T.CylinderGeometry(0.2, 0.2, 0.1, 28), accentMat, 0.85, 0));             // franja
+  alongX(add(new T.CylinderGeometry(0.08, 0.1, 0.32, 20), nozzleMat, 1.36, 0));           // caño
+  add(new T.TorusGeometry(0.075, 0.025, 10, 24), accentMat, 1.52, 0).rotation.y = Math.PI / 2; // punta
+  const grip = add(new T.CapsuleGeometry(0.15, 0.55, 8, 16), gripMat, -0.12, -0.5);       // empuñadura
+  grip.rotation.z = -0.22; grip.scale.z = 0.85;
+  add(new T.TorusGeometry(0.16, 0.03, 10, 24, Math.PI), gripMat, 0.32, -0.17).rotation.z = Math.PI; // guardamonte
+  const trigGeo = new T.BoxGeometry(0.05, 0.2, 0.08); trigGeo.translate(0, -0.1, 0);
+  const trigger = add(trigGeo, accentMat, 0.28, -0.16);                                   // gatillo
+  // tanque transparente con agua adentro
+  const water = add(new T.CylinderGeometry(0.16, 0.16, 0.4, 24), new T.MeshStandardMaterial({
+    color: S.rainbow ? 0xc58bff : 0x3aa8ff, emissive: S.rainbow ? 0x5a1a8a : 0x0a3a6a, emissiveIntensity: 0.5,
+    roughness: 0.2, transparent: true, opacity: 0.85,
+  }), 0.42, 0.3);
+  water.renderOrder = 1;
+  const tank = add(new T.CapsuleGeometry(0.2, 0.28, 8, 24), new T.MeshPhysicalMaterial({
+    color: 0xe6f8ff, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.3, depthWrite: false,
+  }), 0.42, 0.42);
+  tank.renderOrder = 2;
+  add(new T.CylinderGeometry(0.09, 0.1, 0.08, 20), accentMat, 0.42, 0.8);                 // tapa
+  const glow = add(new T.SphereGeometry(0.11, 16, 12), new T.MeshBasicMaterial({
+    color: S.rainbow ? 0xffb0f0 : 0xb0e8ff, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending,
+  }), 1.62, 0);
+  let gem = null;
+  if (S.rainbow) {
+    // fantasía: estrellas a los costados y una gema que gira atrás
+    const shape = new T.Shape();
+    for (let i = 0; i < 10; i++) {
+      const a = Math.PI / 2 + (i * Math.PI) / 5, r = i % 2 ? 0.04 : 0.095;
+      if (i === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r); else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    shape.closePath();
+    const starGeo = new T.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 2 });
+    add(starGeo, accentMat, 0.22, 0, 0.18);
+    add(starGeo, accentMat, 0.22, 0, -0.18).rotation.y = Math.PI;
+    gem = add(new T.IcosahedronGeometry(0.1), new T.MeshStandardMaterial({ color: 0xffe27a, emissive: 0xff5fcf, emissiveIntensity: 0.9, roughness: 0.15, flatShading: true }), -0.42, 0.05);
+  }
+  return { group, trigger, water, glow, gem };
+}
+function disposeGunModel(model) {
+  if (!gl3d) return;
+  gl3d.scene.remove(model.group);
+  model.group.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+}
+
+function drawGun3D(g, now, k) {
+  const { T, renderer, scene, camera } = gl3d;
+  if (!g.model) { g.model = buildGunModel(T, g.style); scene.add(g.model.group); }
+  // suavizado (a la velocidad de la pantalla, aunque la detección vaya más lenta)
+  const c = g.c3, t = g.t3, a = 1 - Math.pow(0.5, k);
+  for (const v of ["f", "d"]) for (const ax of ["x", "y", "z"]) c[v][ax] += (t[v][ax] - c[v][ax]) * a;
+  c.u += (t.u - c.u) * a; c.ox += (t.ox - c.ox) * a; c.oy += (t.oy - c.oy) * a;
+  // pantalla (x der, y abajo, z adentro) → three.js (x der, y arriba, z hacia vos)
+  const F = new T.Vector3(c.f.x, -c.f.y, -c.f.z).normalize();
+  const D = new T.Vector3(c.d.x, -c.d.y, -c.d.z);
+  D.addScaledVector(F, -D.dot(F)).normalize();
+  const Y = D.clone().negate(), Z = new T.Vector3().crossVectors(F, Y);
+  const grp = g.model.group;
+  grp.quaternion.setFromRotationMatrix(new T.Matrix4().makeBasis(F, Y, Z));
+  const age = performance.now() - g.born;
+  const pop = age < 380 ? Math.max(0.01, easeOutBack(age / 380)) : 1;
+  const D0 = (H / 2) / Math.tan((GUN_FOV * Math.PI) / 360); // a esta distancia, 1 unidad = 1 píxel
+  grp.scale.setScalar(c.u * pop);
+  grp.position.set(c.ox - W / 2, H / 2 - c.oy, -D0);
+
+  const m = g.model;
+  m.trigger.rotation.z = g.firing ? -0.45 : 0.12;
+  const level = 0.82 + Math.sin(now / 260) * 0.06;
+  m.water.scale.y = level; m.water.position.y = 0.12 + 0.2 * level;
+  m.glow.material.opacity = g.firing ? 0.5 + Math.random() * 0.3 : 0;
+  if (m.gem) m.gem.rotation.set(now / 900, now / 600, 0);
+  for (const st of Object.values(hands)) if (st.gun?.model) st.gun.model.group.visible = st.gun === g;
+
+  // se dibuja solo un cuadrado alrededor de la mano
+  const box = clamp(Math.ceil((c.u * pop * 5) / 32) * 32, 64, 2048);
+  const bx = Math.round(c.ox - box / 2), by = Math.round(c.oy - box / 2);
+  if (gl3d.box !== box) { renderer.setSize(box, box, false); gl3d.box = box; }
+  camera.aspect = W / H;
+  camera.setViewOffset(W, H, bx, by, box, box);
+  camera.updateProjectionMatrix();
+  renderer.render(scene, camera);
+  ctx.drawImage(renderer.domElement, bx, by, box, box);
+
+  // boquilla en pantalla y dirección del caño, para el chorro
+  const P = new T.Vector3(1.6, 0, 0).applyMatrix4(grp.matrixWorld);
+  const sc = D0 / -P.z;
+  g.nozzle = { x: W / 2 + P.x * sc, y: H / 2 - P.y * sc };
+  g.aim = { x: F.x, y: -F.y, z: F.z };
+  return true;
 }
 
 // Anillo de carga mientras sostenés la pistolita.
@@ -972,10 +1132,17 @@ function render(now, k) {
     drawGunCharge(st);
   }
   for (const st of Object.values(hands)) {
-    if (!st.gun) continue;
+    const g = st.gun;
+    if (!g) continue;
     if (now - st.seen > 600) { dropGun(st); continue; } // se perdió la mano
-    if (st.gun.firing) emitDrops(st.gun, k, now);
-    drawWaterGun(st.gun, now);
+    g.nozzle = null;
+    let drawn3D = false;
+    if (gl3d && g.t3) {
+      try { drawn3D = drawGun3D(g, now, k); }
+      catch (e) { console.warn("El 3D falló: sigo con la pistola 2D.", e); gl3dFailed = true; gl3d = null; }
+    }
+    if (!drawn3D) drawWaterGun(g, now); // mientras carga three.js, o si no hay WebGL
+    if (g.firing) emitDrops(g, k, now);
   }
   drawDrops(k);
   if (bridge) drawBridge(bridge, now);

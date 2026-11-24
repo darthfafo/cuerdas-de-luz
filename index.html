@@ -1,637 +1,116 @@
 <!doctype html>
 <html lang="es">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Cuerdas de Luz</title>
-<style>
-  :root { --glass: rgba(18,18,24,.42); --line: rgba(255,255,255,.14); --text: rgba(255,255,255,.92); --muted: rgba(255,255,255,.55); }
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: var(--text);
-    font-family: ui-sans-serif, -apple-system, "SF Pro Display", "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
-  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
-  video { display: none; }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Solo se puede ejecutar código de este sitio y de jsDelivr (MediaPipe). Los modelos se bajan de Google. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Cuerdas de luz · un instrumento de cuerdas en el aire</title>
+<meta name="description" content="Tendé cuerdas de luz en el aire con las manos y tocalas con el dedo, usando la cámara de tu compu. Todo corre en tu navegador.">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 
-  /* ---------- Intro ---------- */
-  #intro { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10; transition: opacity .6s ease; }
-  #intro.hide { opacity: 0; pointer-events: none; }
-  .card { display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 40px 48px 34px; border-radius: 28px;
-    background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(24px) saturate(140%); -webkit-backdrop-filter: blur(24px) saturate(140%);
-    box-shadow: 0 30px 80px rgba(0,0,0,.35); text-align: center; max-width: 380px; }
-  .title { font-size: 12px; letter-spacing: .32em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
-  .ring { position: relative; width: 132px; height: 132px; display: grid; place-items: center; }
-  .ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
-  .ring circle { fill: none; stroke-width: 2; }
-  .ring .track { stroke: rgba(255,255,255,.12); }
-  .ring .prog { stroke: #fff; stroke-linecap: round; stroke-dasharray: 389.6; stroke-dashoffset: 389.6; transition: stroke-dashoffset .08s linear; }
-  .thumb { font-size: 56px; line-height: 1; transition: transform .25s ease, filter .25s ease; filter: grayscale(.2); }
-  .ring.seen .thumb { transform: scale(1.08); filter: none; }
-  .msg { font-size: 19px; font-weight: 500; line-height: 1.35; letter-spacing: -.01em; }
-  .msg span { color: var(--muted); font-weight: 400; }
-  #status { font-size: 12px; color: var(--muted); min-height: 1em; }
-  #skip { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; padding: 0; }
-  #skip:hover { color: var(--text); }
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cuerdas de luz">
+<meta property="og:title" content="Cuerdas de luz">
+<meta property="og:description" content="Un instrumento de cuerdas invisible: las tendés en el aire con las manos y las tocás con el dedo. Solo necesitás la cámara.">
+<meta property="og:url" content="https://darthfafo.github.io/cuerdas-de-luz/">
+<meta property="og:image" content="https://darthfafo.github.io/cuerdas-de-luz/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Cuerdas de luz brillantes tendidas en el aire">
+<meta property="og:locale" content="es_AR">
+<meta name="twitter:card" content="summary_large_image">
 
-  /* ---------- Controls ---------- */
-  #controls { position: fixed; top: 18px; right: 18px; display: flex; gap: 8px; z-index: 5; opacity: 0; transform: translateY(-6px); transition: opacity .5s ease .2s, transform .5s ease .2s; pointer-events: none; }
-  body.live #controls { opacity: 1; transform: none; pointer-events: auto; }
-  .btn { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 13px; font-weight: 500; color: var(--text);
-    padding: 9px 15px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass); cursor: pointer;
-    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); transition: background .2s, border-color .2s; }
-  .btn:hover { background: rgba(40,40,52,.6); border-color: rgba(255,255,255,.28); }
-  .btn.on { background: rgba(255,255,255,.92); color: #000; border-color: transparent; }
-  .btn svg { width: 15px; height: 15px; }
-
-  #hint { position: fixed; left: 18px; bottom: 18px; font-size: 12px; color: var(--muted); line-height: 1.6; z-index: 5; opacity: 0; transition: opacity .6s ease .4s; }
-  body.live #hint { opacity: 1; }
-  #hint b { color: var(--text); font-weight: 500; }
-  #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); font-size: 13px; padding: 9px 16px; border-radius: 999px;
-    background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); z-index: 6; display: none; }
-</style>
+<link rel="stylesheet" href="style.css">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs" crossorigin>
+<link rel="preconnect" href="https://storage.googleapis.com" crossorigin>
+<script type="module" src="app.js"></script>
 </head>
 <body>
 <video id="video" playsinline muted></video>
-<canvas id="c"></canvas>
+<canvas id="stage" aria-label="Escenario de cuerdas de luz"></canvas>
 
-<div id="intro">
-  <div class="card">
-    <div class="title">Cuerdas de luz</div>
-    <div class="ring" id="ring">
+<!-- Pantalla de inicio: la cámara se ve desenfocada hasta el pulgar arriba -->
+<main id="intro" class="intro">
+  <section class="card glass" aria-labelledby="introTitle">
+    <h1 id="introTitle" class="eyebrow">Cuerdas de luz</h1>
+    <div class="ring" id="ring" aria-hidden="true">
       <svg viewBox="0 0 132 132"><circle class="track" cx="66" cy="66" r="62"/><circle class="prog" id="prog" cx="66" cy="66" r="62"/></svg>
-      <div class="thumb">👍</div>
+      <span class="thumb">👍</span>
     </div>
-    <div class="msg">Haz un pulgar arriba<br><span>con la mano derecha para empezar</span></div>
-    <div id="status">Iniciando cámara…</div>
-    <button id="skip">o pulsa Enter</button>
+    <p class="msg">Hacé un pulgar arriba<br><span>con la mano derecha para empezar</span></p>
+    <p id="status" class="status" role="status" aria-live="polite">Preparando…</p>
+    <div id="introActions" class="actions" hidden>
+      <button class="btn primary" id="retryBtn" type="button">Reintentar</button>
+      <button class="btn" id="noCamBtn" type="button">Usar sin cámara</button>
+    </div>
+    <button class="link" id="skipBtn" type="button">Empezar sin gesto <kbd>Enter</kbd></button>
+    <p class="fine">La cámara se procesa en tu dispositivo. No se sube nada a internet.</p>
+    <p class="credit">por <a href="https://github.com/darthfafo" target="_blank" rel="noopener noreferrer">Darth Fafo</a> &amp; Claude</p>
+  </section>
+</main>
+
+<!-- Controles -->
+<nav id="controls" class="controls" aria-label="Controles">
+  <button class="btn rec" id="recBtn" type="button" title="Grabar un clip de 20 segundos (R)" aria-label="Grabar un clip de 20 segundos">
+    <span class="dot" aria-hidden="true"></span><span class="label" id="recLabel">Grabar clip</span>
+  </button>
+  <button class="btn" id="eyesBtn" type="button" aria-pressed="false" title="Tapar los ojos con una barra negra (O)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="9" width="18" height="6" rx="1.5" fill="currentColor"/></svg>
+    <span class="label">Ocultar ojos</span>
+  </button>
+  <button class="btn" id="undoBtn" type="button" title="Deshacer la última cuerda (Z)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+    <span class="label">Deshacer</span>
+  </button>
+  <button class="btn" id="clearBtn" type="button" title="Borrar todas las cuerdas (C)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>
+    <span class="label">Limpiar</span>
+  </button>
+  <button class="btn icon" id="soundBtn" type="button" aria-pressed="true" aria-label="Silenciar" title="Sonido (M)">
+    <svg class="snd-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+    <svg class="snd-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6M22 9l-6 6"/></svg>
+  </button>
+  <button class="btn icon" id="helpBtn" type="button" aria-expanded="false" aria-controls="help" aria-label="Ayuda" title="Ayuda (?)">?</button>
+</nav>
+
+<div id="recBar" class="rec-bar" aria-hidden="true"></div>
+<div id="countdown" class="countdown" aria-live="assertive"></div>
+
+<!-- Ayuda -->
+<aside id="help" class="help glass" aria-label="Cómo se toca">
+  <h2>Cómo se toca</h2>
+  <ul>
+    <li><span class="g" aria-hidden="true">🤏🤏</span><span><b>Pinza con las dos manos</b> (pulgar + índice): aparece una cuerda entre ellas. Soltá y queda fija.</span></li>
+    <li><span class="g" aria-hidden="true">☝️</span><span><b>Pasá el índice</b> a través de una cuerda para tocarla. Larga = grave, corta = aguda.</span></li>
+    <li><span class="g" aria-hidden="true">🖱️</span><span><b>Con mouse o con el dedo</b>: arrastrá para crear, pasá por encima para tocar.</span></li>
+  </ul>
+  <p class="keys"><kbd>R</kbd> grabar · <kbd>O</kbd> ojos · <kbd>Z</kbd> deshacer · <kbd>C</kbd> limpiar · <kbd>M</kbd> sonido · <kbd>S</kbd> escala (<span id="scaleName">pentatónica</span>) · <kbd>H</kbd> manos · <kbd>V</kbd> video</p>
+  <p class="credit">Hecho por <a href="https://github.com/darthfafo" target="_blank" rel="noopener noreferrer">Darth Fafo</a> &amp; Claude · <a href="https://github.com/darthfafo/cuerdas-de-luz" target="_blank" rel="noopener noreferrer">código</a></p>
+</aside>
+
+<div id="toast" class="toast glass" role="status" aria-live="polite"></div>
+
+<!-- Clip grabado -->
+<div id="clipModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="clipTitle" hidden>
+  <div class="modal-card glass">
+    <div class="modal-head">
+      <h2 id="clipTitle">Tu clip está listo</h2>
+      <button class="btn icon" id="clipClose" type="button" aria-label="Cerrar y descartar">✕</button>
+    </div>
+    <video id="clipVideo" controls playsinline loop muted></video>
+    <p class="modal-note" id="clipInfo"></p>
+    <div class="modal-actions">
+      <button class="btn primary" id="clipDownload" type="button">Descargar</button>
+      <button class="btn" id="clipShare" type="button" hidden>Compartir</button>
+      <button class="btn ghost" id="clipDiscard" type="button">Descartar</button>
+    </div>
   </div>
 </div>
 
-<div id="controls">
-  <button class="btn" id="eyesBtn" title="Tapar los ojos con una barra negra">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="9" width="18" height="6" rx="1.5" fill="currentColor" stroke="none"/></svg>
-    Ocultar ojos
-  </button>
-  <button class="btn" id="clearBtn" title="Borrar todas las cuerdas (C)">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>
-    Limpiar cuerdas
-  </button>
-</div>
-
-<div id="hint">
-  <b>Pinza con ambas manos → soltar</b> crea una cuerda · <b>Índice</b> la toca<br>
-  Z deshacer · H manos · S escala (<span id="scaleName">pentatónica</span>) · V video
-</div>
-<div id="toast">Toca la pantalla para activar el sonido</div>
-
-<script type="module">
-import { FilesetResolver, HandLandmarker, FaceDetector } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
-
-const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
-
-const video = document.getElementById("video");
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
-const introEl = document.getElementById("intro");
-const ringEl = document.getElementById("ring");
-const progEl = document.getElementById("prog");
-const statusEl = document.getElementById("status");
-const toastEl = document.getElementById("toast");
-const eyesBtn = document.getElementById("eyesBtn");
-
-let W = 0, H = 0, DPR = 1;
-function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W * DPR; canvas.height = H * DPR;
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-}
-addEventListener("resize", resize); resize();
-
-// ---------- State ----------
-let started = false, startedAt = 0;
-let showHands = true, showVideo = true, hideEyes = false;
-const SCALES = { "pentatónica": [0, 2, 4, 7, 9], "menor": [0, 2, 3, 5, 7, 8, 10], "cromática": [0,1,2,3,4,5,6,7,8,9,10,11], "libre": null };
-const scaleNames = Object.keys(SCALES);
-let scaleIdx = 0;
-const MAX_STRINGS = 14;
-
-// ---------- Audio (Karplus-Strong) ----------
-let audio, master;
-function initAudio() {
-  if (audio) return;
-  audio = new (window.AudioContext || window.webkitAudioContext)();
-  master = audio.createGain(); master.gain.value = 0.6;
-  const comp = audio.createDynamicsCompressor();
-  const delay = audio.createDelay(); delay.delayTime.value = 0.18;
-  const fb = audio.createGain(); fb.gain.value = 0.28;
-  const wet = audio.createGain(); wet.gain.value = 0.25;
-  master.connect(comp); master.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(wet); wet.connect(comp);
-  comp.connect(audio.destination);
-}
-function resumeAudio() {
-  initAudio();
-  if (audio.state !== "running") audio.resume().catch(() => {});
-  setTimeout(updateToast, 150);
-}
-function updateToast() { toastEl.style.display = started && audio && audio.state !== "running" ? "block" : "none"; }
-addEventListener("pointerdown", resumeAudio);
-addEventListener("keydown", resumeAudio);
-
-function quantize(freq) {
-  const scale = SCALES[scaleNames[scaleIdx]];
-  if (!scale) return freq;
-  const midi = 69 + 12 * Math.log2(freq / 440);
-  let best = midi, bestD = 1e9;
-  for (let o = -1; o <= 1; o++) {
-    const base = Math.floor(midi / 12) * 12 + o * 12;
-    for (const s of scale) { const m = base + s; const d = Math.abs(m - midi); if (d < bestD) { bestD = d; best = m; } }
-  }
-  return 440 * Math.pow(2, (best - 69) / 12);
-}
-function pluckSound(freq, velocity, pan, pos) {
-  if (!audio || audio.state !== "running") return;
-  const sr = audio.sampleRate, len = Math.floor(sr * 2.6);
-  const buf = audio.createBuffer(1, len, sr);
-  const out = buf.getChannelData(0);
-  const N = Math.max(2, Math.round(sr / freq));
-  const ring = new Float32Array(N);
-  const p = Math.max(1, Math.round(N * Math.min(0.5, Math.max(0.05, pos))));
-  for (let i = 0; i < N; i++) ring[i] = Math.random() * 2 - 1;
-  for (let i = N - 1; i >= p; i--) ring[i] -= ring[i - p];
-  let idx = 0;
-  const damp = 0.996 + Math.min(0.0035, freq / 1e6);
-  for (let i = 0; i < len; i++) {
-    const a = ring[idx], b = ring[(idx + 1) % N];
-    out[i] = a;
-    ring[idx] = (a + b) * 0.5 * damp;
-    idx = (idx + 1) % N;
-  }
-  const src = audio.createBufferSource(); src.buffer = buf;
-  const g = audio.createGain(); g.gain.value = 0.25 + 0.55 * velocity;
-  src.connect(g);
-  if (audio.createStereoPanner) { const pn = audio.createStereoPanner(); pn.pan.value = pan; g.connect(pn); pn.connect(master); }
-  else g.connect(master);
-  src.start();
-}
-
-// ---------- Strings ----------
-const strings = [];
-let hueSeed = Math.random() * 360;
-function makeString(a, b) {
-  hueSeed = (hueSeed + 47) % 360;
-  return { a: { ...a }, b: { ...b }, hue: hueSeed, modes: [], lastPluck: 0 };
-}
-function addString(a, b) {
-  const s = makeString(a, b);
-  strings.push(s);
-  if (strings.length > MAX_STRINGS) strings.shift();
-  pluck(s, 0.5, 0.4, 1);
-}
-function clearStrings() {
-  for (const s of strings) spawnSparks((s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2, s.hue, 10);
-  strings.length = 0;
-}
-function stringFreq(s) {
-  const L = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y);
-  const ref = Math.hypot(W, H);
-  return quantize(110 * Math.pow(2, 3.2 * (1 - Math.min(1, L / (ref * 0.9)))));
-}
-function pluck(s, t, velocity, sign) {
-  const now = performance.now() / 1000;
-  const L = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y);
-  const amp = Math.min(38, 6 + velocity * 34) * Math.min(1, L / 300);
-  for (let n = 1; n <= 6; n++) {
-    const A = amp * Math.sin(n * Math.PI * t) / (n * n) * 1.6;
-    s.modes.push({ n, A: A * sign, t0: now, w: 2 * Math.PI * (2.2 + n * 2.6), decay: 1.1 + n * 0.6 });
-  }
-  if (s.modes.length > 60) s.modes.splice(0, s.modes.length - 60);
-  s.lastPluck = now;
-  const px = s.a.x + (s.b.x - s.a.x) * t, py = s.a.y + (s.b.y - s.a.y) * t;
-  spawnSparks(px, py, s.hue, 14 + velocity * 26);
-  pluckSound(stringFreq(s), velocity, (px / W) * 2 - 1, t);
-}
-function displacement(s, u, now) {
-  let d = 0;
-  for (const m of s.modes) { const dt = now - m.t0; d += m.A * Math.exp(-m.decay * dt) * Math.cos(m.w * dt) * Math.sin(m.n * Math.PI * u); }
-  return d;
-}
-function energy(s, now) { let e = 0; for (const m of s.modes) e += Math.abs(m.A) * Math.exp(-m.decay * (now - m.t0)); return e; }
-
-// ---------- Particles ----------
-const sparks = [];
-function spawnSparks(x, y, hue, n) {
-  for (let i = 0; i < n; i++) {
-    const a = Math.random() * Math.PI * 2, sp = 1 + Math.random() * 6;
-    sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, hue: hue + (Math.random() * 60 - 30) });
-  }
-}
-
-// ---------- Geometry ----------
-function segIntersect(p1, p2, p3, p4) {
-  const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
-  if (Math.abs(d) < 1e-9) return null;
-  const t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
-  const u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
-  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? { t, u } : null;
-}
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-// ---------- Video mapping (mirrored, cover) ----------
-let ox = 0, oy = 0, dw = 0, dh = 0;
-function computeMap() {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw) return;
-  const sc = Math.max(W / vw, H / vh);
-  dw = vw * sc; dh = vh * sc; ox = (W - dw) / 2; oy = (H - dh) / 2;
-}
-const toScreen = (lm) => ({ x: W - (ox + lm.x * dw), y: oy + lm.y * dh });
-
-// ---------- Hands ----------
-let landmarker, faceDetector, faceLoading = false;
-const handState = {};
-const getState = (key) => handState[key] ||= { pinching: false, pinchPos: null, smooth: null, prevTip: null, seen: 0, pinchFrames: 0, releaseFrames: 0 };
-const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
-let bridge = null;
-
-// Pick only the main person's two hands: one "L" slot, one "R" slot.
-// Person = largest face; hands must be near it and among the closest (largest) ones.
-function selectHands(result, now) {
-  let hands = (result.landmarks || []).map((lms, i) => {
-    const pts = lms.map(toScreen);
-    const label = result.handedness?.[i]?.[0]?.categoryName === "Left" ? "L" : "R";
-    return { pts, size: dist(pts[0], pts[9]), label };
-  });
-  if (!hands.length) return [];
-  if (person && now - person.seen < 800) {
-    hands = hands.filter(h => Math.abs(h.pts[0].x - person.cx) < person.w * 4 && h.pts[0].y > person.cy - person.w * 3);
-  }
-  const maxS = Math.max(0, ...hands.map(h => h.size));
-  hands = hands.filter(h => h.size >= maxS * 0.45).sort((a, b) => b.size - a.size).slice(0, 2);
-  if (hands.length === 2 && hands[0].label === hands[1].label) {
-    // same label twice → trust screen position (mirrored view: right hand on the right)
-    const [r, l] = hands[0].pts[0].x > hands[1].pts[0].x ? hands : [hands[1], hands[0]];
-    r.label = "R"; l.label = "L";
-  }
-  return hands.map(h => ({ key: h.label, pts: h.pts }));
-}
-
-function processHands(hands, now) {
-  const seenKeys = new Set();
-  hands.forEach(({ key, pts }) => {
-    seenKeys.add(key);
-    const st = getState(key);
-    st.seen = now;
-    st.pts = pts;
-
-    const size = dist(pts[0], pts[9]);
-    const thumb = pts[4], index = pts[8];
-    const pd = dist(thumb, index);
-    const mid = { x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2 };
-    st.smooth = st.smooth ? { x: st.smooth.x * 0.45 + mid.x * 0.55, y: st.smooth.y * 0.45 + mid.y * 0.55 } : mid;
-    st.pinchPos = st.smooth;
-
-    const closeT = size * 0.28, openT = size * 0.45;
-    if (!st.pinching) {
-      if (pd < closeT) { if (++st.pinchFrames >= 2) { st.pinching = true; st.releaseFrames = 0; } }
-      else st.pinchFrames = 0;
-    } else {
-      if (pd > openT) { if (++st.releaseFrames >= 2) endPinch(st); }
-      else st.releaseFrames = 0;
-    }
-
-    // pluck with index fingertip
-    const tip = index;
-    if (!st.pinching && st.prevTip) {
-      const move = dist(tip, st.prevTip);
-      if (move > 2) {
-        const tNow = now / 1000;
-        for (const s of strings) {
-          if (tNow - s.lastPluck < 0.12) continue;
-          const hit = segIntersect(s.a, s.b, st.prevTip, tip);
-          if (hit && hit.t > 0.04 && hit.t < 0.96) {
-            const nx = -(s.b.y - s.a.y), ny = s.b.x - s.a.x;
-            const sign = Math.sign((tip.x - st.prevTip.x) * nx + (tip.y - st.prevTip.y) * ny) || 1;
-            pluck(s, hit.t, Math.min(1, move / 60), sign);
-          }
-        }
-      }
-    }
-    st.prevTip = tip;
-  });
-
-  for (const [k, st] of Object.entries(handState)) {
-    if (!seenKeys.has(k)) {
-      if (st.pinching && now - st.seen > 250) endPinch(st);
-      if (now - st.seen > 150) { st.prevTip = null; st.pts = null; }
-    }
-  }
-
-  // two-hand bridge: string spans both pinches, created on release
-  const pinchers = Object.values(handState).filter(st => st.pinching && st.pinchPos && now - st.seen < 250);
-  if (pinchers.length >= 2) bridge = { a: { ...pinchers[0].pinchPos }, b: { ...pinchers[1].pinchPos } };
-  else if (bridge) { if (dist(bridge.a, bridge.b) > 60) addString(bridge.a, bridge.b); bridge = null; }
-}
-function endPinch(st) { st.pinching = false; st.pinchFrames = 0; st.releaseFrames = 0; }
-
-// ---------- Thumbs-up gate ----------
-let thumbHold = 0, lastGateT = 0;
-function isThumbsUp(p) {
-  const size = dist(p[0], p[9]);
-  const tv = { x: p[4].x - p[2].x, y: p[4].y - p[2].y };
-  const tl = Math.hypot(tv.x, tv.y);
-  if (tl < size * 0.45) return false;              // thumb extended
-  if (tv.y > -0.7 * tl) return false;              // pointing up
-  for (const i of [8, 12, 16, 20]) if (p[i].y < p[4].y + size * 0.15) return false; // thumb tip is highest
-  for (const [tip, pip] of [[8, 6], [12, 10], [16, 14], [20, 18]]) // fingers curled
-    if (dist(p[tip], p[0]) > dist(p[pip], p[0]) * 1.1) return false;
-  return true;
-}
-function checkGate(hands, now) {
-  const dt = lastGateT ? Math.min(100, now - lastGateT) : 16;
-  lastGateT = now;
-  let seen = false, up = false;
-  for (const { key, pts } of hands) {
-    if (key !== "R") continue;
-    seen = true;
-    if (isThumbsUp(pts)) up = true;
-  }
-  ringEl.classList.toggle("seen", seen);
-  thumbHold = up ? thumbHold + dt : Math.max(0, thumbHold - dt * 2);
-  const HOLD = 650;
-  progEl.style.strokeDashoffset = 389.6 * (1 - Math.min(1, thumbHold / HOLD));
-  if (thumbHold >= HOLD) start();
-}
-function start() {
-  if (started) return;
-  started = true; startedAt = performance.now();
-  introEl.classList.add("hide");
-  document.body.classList.add("live");
-  resumeAudio();
-}
-
-// ---------- Face (eye bar) ----------
-let eyeBar = null, eyeBarSeen = 0;
-async function loadFace() {
-  if (faceDetector || faceLoading) return;
-  faceLoading = true;
-  try {
-    const fs = await FilesetResolver.forVisionTasks(WASM);
-    const opts = (delegate) => ({ baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: "VIDEO", minDetectionConfidence: 0.5 });
-    try { faceDetector = await FaceDetector.createFromOptions(fs, opts("GPU")); }
-    catch { faceDetector = await FaceDetector.createFromOptions(fs, opts("CPU")); }
-  } catch (e) { console.error(e); }
-  faceLoading = false;
-}
-let person = null; // main person = largest face {cx, cy, w, seen}
-function updatePerson(now) {
-  const dets = faceDetector.detectForVideo(video, now).detections || [];
-  let det = null, bw = 0;
-  for (const d of dets) { const w = d.boundingBox?.width || 0; if (w > bw) { bw = w; det = d; } }
-  if (!det) return;
-  const bb = det.boundingBox, vw = video.videoWidth, vh = video.videoHeight;
-  const c = toScreen({ x: (bb.originX + bb.width / 2) / vw, y: (bb.originY + bb.height / 2) / vh });
-  const w = bb.width / vw * dw;
-  if (person && now - person.seen < 500) {
-    person.cx += (c.x - person.cx) * 0.4; person.cy += (c.y - person.cy) * 0.4; person.w += (w - person.w) * 0.4; person.seen = now;
-  } else person = { cx: c.x, cy: c.y, w, seen: now };
-  if (!det.keypoints || det.keypoints.length < 2) return;
-  const r = toScreen(det.keypoints[0]), l = toScreen(det.keypoints[1]);
-  const target = { cx: (r.x + l.x) / 2, cy: (r.y + l.y) / 2, ang: Math.atan2(l.y - r.y, l.x - r.x), d: dist(r, l) };
-  if (target.ang > Math.PI / 2) target.ang -= Math.PI; else if (target.ang < -Math.PI / 2) target.ang += Math.PI;
-  if (!eyeBar || now - eyeBarSeen > 400) eyeBar = target;
-  else { const k = 0.5; for (const key of ["cx", "cy", "ang", "d"]) eyeBar[key] += (target[key] - eyeBar[key]) * k; }
-  eyeBarSeen = now;
-}
-function drawEyeBar(now) {
-  if (!eyeBar || now - eyeBarSeen > 1200) return;
-  ctx.save();
-  ctx.translate(eyeBar.cx, eyeBar.cy); ctx.rotate(eyeBar.ang);
-  const w = eyeBar.d * 2.5, h = Math.max(18, eyeBar.d * 0.62);
-  ctx.fillStyle = "#000";
-  ctx.fillRect(-w / 2, -h / 2, w, h);
-  ctx.restore();
-}
-eyesBtn.addEventListener("click", () => {
-  hideEyes = !hideEyes;
-  eyesBtn.classList.toggle("on", hideEyes);
-  if (hideEyes) loadFace();
-});
-document.getElementById("clearBtn").addEventListener("click", clearStrings);
-
-// ---------- Drawing ----------
-function drawRuler(a, b, hue, alpha) {
-  const L = dist(a, b); if (L < 10) return;
-  const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L, nx = -uy, ny = ux;
-  ctx.strokeStyle = `hsla(${hue},100%,88%,${0.4 * alpha})`;
-  ctx.lineWidth = 0.5;
-  ctx.beginPath();
-  for (let d = 24, i = 1; d < L; d += 24, i++) {
-    const len = i % 5 === 0 ? 8 : 3;
-    const x = a.x + ux * d, y = a.y + uy * d;
-    ctx.moveTo(x + nx * 4, y + ny * 4); ctx.lineTo(x + nx * (4 + len), y + ny * (4 + len));
-  }
-  ctx.stroke();
-}
-function drawEndpoint(p, hue) {
-  ctx.strokeStyle = `hsla(${hue},100%,88%,0.75)`;
-  ctx.lineWidth = 0.8;
-  ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(p.x - 8, p.y); ctx.lineTo(p.x + 8, p.y); ctx.moveTo(p.x, p.y - 8); ctx.lineTo(p.x, p.y + 8);
-  ctx.lineWidth = 0.5; ctx.stroke();
-}
-function drawString(s, now) {
-  const L = dist(s.a, s.b);
-  const nx = -(s.b.y - s.a.y) / L, ny = (s.b.x - s.a.x) / L;
-  const segs = Math.max(24, Math.min(120, Math.floor(L / 8)));
-  const pts = [];
-  for (let i = 0; i <= segs; i++) {
-    const u = i / segs, d = displacement(s, u, now);
-    pts.push({ x: s.a.x + (s.b.x - s.a.x) * u + nx * d, y: s.a.y + (s.b.y - s.a.y) * u + ny * d });
-  }
-  const e = Math.min(1, energy(s, now) / 40);
-  const path = () => { ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y); };
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.lineCap = "round";
-  ctx.shadowColor = `hsl(${s.hue},100%,70%)`;
-  ctx.shadowBlur = 4 + 12 * e;
-  path(); ctx.strokeStyle = `hsla(${s.hue},100%,70%,${0.18 + 0.35 * e})`; ctx.lineWidth = 1.6 + 1.6 * e; ctx.stroke();
-  ctx.shadowBlur = 0;
-  path(); ctx.strokeStyle = `hsla(${s.hue},100%,93%,${0.75 + 0.25 * e})`; ctx.lineWidth = 0.7; ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(s.a.x + nx * 4, s.a.y + ny * 4); ctx.lineTo(s.b.x + nx * 4, s.b.y + ny * 4);
-  ctx.strokeStyle = `hsla(${s.hue},100%,85%,0.08)`; ctx.lineWidth = 0.5; ctx.stroke();
-  drawRuler(s.a, s.b, s.hue, 0.6);
-  ctx.restore();
-  drawEndpoint(s.a, s.hue); drawEndpoint(s.b, s.hue);
-  s.modes = s.modes.filter(m => Math.abs(m.A) * Math.exp(-m.decay * (now - m.t0)) > 0.05);
-}
-function drawHand(st) {
-  const p = st.pts; if (!p) return;
-  ctx.save();
-  ctx.strokeStyle = "rgba(40,230,80,0.9)"; ctx.lineWidth = 3;
-  ctx.beginPath();
-  for (const [a, b] of CONNECTIONS) { ctx.moveTo(p[a].x, p[a].y); ctx.lineTo(p[b].x, p[b].y); }
-  ctx.stroke();
-  ctx.fillStyle = "rgba(220,20,30,0.95)";
-  for (const q of p) { ctx.beginPath(); ctx.arc(q.x, q.y, 5, 0, Math.PI * 2); ctx.fill(); }
-  ctx.restore();
-}
-function drawCursor(st) {
-  if (!st.pts || !st.pinchPos) return;
-  const c = st.pinchPos;
-  ctx.save();
-  ctx.strokeStyle = st.pinching ? "rgba(255,190,120,0.95)" : "rgba(255,255,255,0.6)";
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(c.x, c.y, st.pinching ? 5 : 8, 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
-}
-function drawBridge(now) {
-  if (!bridge) return;
-  const a = bridge.a, b = bridge.b, hue = (hueSeed + 47) % 360;
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.shadowColor = `hsl(${hue},100%,70%)`; ctx.shadowBlur = 6;
-  ctx.setLineDash([6, 5]); ctx.lineDashOffset = -now / 40;
-  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-  ctx.strokeStyle = `hsla(${hue},100%,88%,0.8)`; ctx.lineWidth = 0.8; ctx.stroke();
-  ctx.setLineDash([]); ctx.shadowBlur = 0;
-  drawRuler(a, b, hue, 0.8);
-  ctx.globalCompositeOperation = "source-over";
-  drawEndpoint(a, hue); drawEndpoint(b, hue);
-  const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "11px ui-monospace, monospace";
-  ctx.fillText(Math.round(dist(a, b)) + " px", m.x + 10, m.y - 10);
-  ctx.restore();
-}
-
-// Strong blur: downscale to a tiny canvas, then upscale (+ canvas filter where supported)
-const tiny = document.createElement("canvas");
-const tctx = tiny.getContext("2d");
-const hasFilter = "filter" in ctx;
-function drawVideo(blurAmt) {
-  if (!dw) return;
-  if (blurAmt < 1) {
-    ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
-    ctx.drawImage(video, ox, oy, dw, dh);
-    ctx.restore();
-  }
-  if (blurAmt > 0) {
-    tiny.width = 48; tiny.height = Math.max(1, Math.round(48 * dh / dw));
-    tctx.drawImage(video, 0, 0, tiny.width, tiny.height);
-    ctx.save();
-    ctx.globalAlpha = blurAmt;
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-    if (hasFilter) ctx.filter = "blur(18px) saturate(120%)";
-    ctx.translate(W, 0); ctx.scale(-1, 1);
-    ctx.drawImage(tiny, ox - 40, oy - 40, dw + 80, dh + 80);
-    ctx.restore();
-  }
-}
-
-let lastVideoTime = -1;
-function frame() {
-  const now = performance.now();
-  if (video.readyState >= 2) {
-    computeMap();
-    if (video.currentTime !== lastVideoTime) {
-      lastVideoTime = video.currentTime;
-      if (faceDetector) updatePerson(now);
-      if (landmarker) {
-        const hands = selectHands(landmarker.detectForVideo(video, now), now);
-        if (started) processHands(hands, now); else checkGate(hands, now);
-      }
-    }
-  }
-
-  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-  const blur = started ? Math.max(0, 1 - (now - startedAt) / 700) : 1;
-  if (showVideo && video.readyState >= 2) {
-    drawVideo(blur);
-    if (hideEyes) drawEyeBar(now);
-    ctx.fillStyle = `rgba(0,0,0,${0.18 + 0.2 * blur})`; ctx.fillRect(0, 0, W, H);
-  }
-
-  const tSec = now / 1000;
-  for (const s of strings) drawString(s, tSec);
-
-  ctx.save(); ctx.globalCompositeOperation = "lighter";
-  for (let i = sparks.length - 1; i >= 0; i--) {
-    const p = sparks[i];
-    p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.vx *= 0.97; p.vy *= 0.97; p.life -= 0.022;
-    if (p.life <= 0) { sparks.splice(i, 1); continue; }
-    ctx.strokeStyle = `hsla(${p.hue},100%,85%,${p.life * 0.8})`; ctx.lineWidth = 0.7;
-    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 2.5, p.y - p.vy * 2.5); ctx.stroke();
-  }
-  ctx.restore();
-
-  if (started) {
-    for (const st of Object.values(handState)) {
-      if (now - st.seen > 150) continue;
-      if (showHands) drawHand(st);
-      drawCursor(st);
-    }
-    drawBridge(now);
-  }
-  requestAnimationFrame(frame);
-}
-
-// ---------- Boot (camera starts automatically) ----------
-async function boot() {
-  try {
-    initAudio();
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }, audio: false });
-    video.srcObject = stream;
-    await video.play();
-    statusEl.textContent = "Cargando detección de manos…";
-    const fs = await FilesetResolver.forVisionTasks(WASM);
-    const opts = (delegate) => ({ baseOptions: { modelAssetPath: HAND_MODEL, delegate }, runningMode: "VIDEO", numHands: 4,
-      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
-    try { landmarker = await HandLandmarker.createFromOptions(fs, opts("GPU")); }
-    catch { landmarker = await HandLandmarker.createFromOptions(fs, opts("CPU")); }
-    statusEl.textContent = "";
-    loadFace(); // used to lock onto the main person (and for the eye bar)
-  } catch (e) {
-    console.error(e);
-    statusEl.textContent = e.name === "NotAllowedError" ? "Permite el acceso a la cámara y recarga la página." : "Error: " + (e.message || e);
-  }
-}
-boot();
-
-document.getElementById("skip").addEventListener("click", start);
-addEventListener("keydown", (e) => {
-  const k = e.key.toLowerCase();
-  if (k === "enter") start();
-  if (!started) return;
-  if (k === "c") clearStrings();
-  else if (k === "z") strings.pop();
-  else if (k === "h") showHands = !showHands;
-  else if (k === "v") showVideo = !showVideo;
-  else if (k === "s") { scaleIdx = (scaleIdx + 1) % scaleNames.length; document.getElementById("scaleName").textContent = scaleNames[scaleIdx]; }
-});
-
-// Mouse fallback: drag to create, move across to pluck
-let mouseDown = null, prevMouse = null;
-canvas.addEventListener("pointerdown", (e) => { if (started) mouseDown = { x: e.clientX, y: e.clientY }; });
-canvas.addEventListener("pointerup", (e) => {
-  const p = { x: e.clientX, y: e.clientY };
-  if (mouseDown && dist(mouseDown, p) > 60) addString(mouseDown, p);
-  mouseDown = null;
-});
-canvas.addEventListener("pointermove", (e) => {
-  const p = { x: e.clientX, y: e.clientY };
-  if (started && prevMouse && !mouseDown) {
-    const tNow = performance.now() / 1000;
-    for (const s of strings) {
-      if (tNow - s.lastPluck < 0.12) continue;
-      const hit = segIntersect(s.a, s.b, prevMouse, p);
-      if (hit && hit.t > 0.04 && hit.t < 0.96) pluck(s, hit.t, Math.min(1, dist(p, prevMouse) / 60), 1);
-    }
-  }
-  prevMouse = p;
-});
-
-requestAnimationFrame(frame);
-</script>
+<noscript><p class="noscript">Cuerdas de luz necesita JavaScript activado.</p></noscript>
 </body>
 </html>
